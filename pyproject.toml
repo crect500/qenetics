@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name="qenetics"
+dynamic=["version"]
+description="Quantum algorithms for genetic data machine learning models"
+requires-python=">=3.11"
+authors=[{name="Christopher Rector", email="chrisrector14@gmail.com"}]
+dependencies=[
+    "jax",
+    "numpy",
+    "optax",
+    "pennylane"
+]
+
+
+[project.optional-dependencies]
+dev = [
+    "mypy",
+    "pytest",
+    "ruff"
+]
+
+[tool.setuptools.packages.find]
+where=["src"]
+
+[tool.setuptools.dynamic.version]
+attr = "qenetics.__version__"
