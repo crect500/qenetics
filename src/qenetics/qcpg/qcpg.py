@@ -167,7 +167,9 @@ def amplitude_encode_nucleotide(
         )
 
 
-def amplitude_encode_all_nucleotides(nucleotides: Iterable[Nucleodtide]) -> None:
+def amplitude_encode_all_nucleotides(
+    nucleotides: Iterable[Nucleodtide],
+) -> None:
     """
     Amplitude encode nucleotide values into a quantum circuit at appropriate addresses.
 
@@ -244,7 +246,7 @@ def _strongly_entangled_run_update_parameters(
 
 def train_strongly_entangled_qcpg_circuit(
     parameters: NDArray[float],
-    nucleotides: NDArray[int],
+    nucleotides: list[Nucleodtide],
     targets: NDArray[int],
     max_steps: int = 50,
 ):
@@ -253,7 +255,12 @@ def train_strongly_entangled_qcpg_circuit(
     opt_state = optimizer.init(parameters)
     for iteration in range(max_steps):
         parameters, opt_state, loss_value = _strongly_entangled_run_update_parameters(
-            iteration, parameters, nucleotides, targets, optimizer, opt_state
+            iteration,
+            parameters,
+            nucleotides,
+            targets,
+            optimizer,
+            opt_state,
         )
         loss_history.append(loss_value)
 

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from csv import DictReader
 from dataclasses import dataclass
 from io import TextIOBase
 from pathlib import Path
 from typing import Generator
+
+from qenetics.qcpg.qcpg import string_to_nucleotides, Nucleodtide
 
 
 @dataclass
@@ -110,7 +113,8 @@ def extract_fasfa_metadata(fasfa_file: Path) -> dict[str, SequenceInfo]:
 
 
 def _load_methlation_file_data(
-    methylation_file: Path, methylation_data: dict[str, dict[int, MethylationInfo]]
+    methylation_file: Path,
+    methylation_data: dict[str, dict[int, MethylationInfo]],
 ) -> None:
     """
     Load methylation counts and associated reference genome positions from TSV file.
@@ -174,7 +178,8 @@ def combine_methylation_results(
 
 
 def filter_and_calculate_methylation(
-    methylation_profiles: dict[str, dict[int, MethylationInfo]], minimum_count: int = 1
+    methylation_profiles: dict[str, dict[int, MethylationInfo]],
+    minimum_count: int = 1,
 ) -> dict[str, dict[int, MethylationInfo]]:
     """
     Remove methylation profiles with fewer than minimum counts and calculate ratio.
@@ -304,7 +309,8 @@ def retrieve_all_cpg_sequences(
                 )
                 if sequence:
                     yield MethylationSequence(
-                        sequence=sequence, methylation_profile=methylation_profile
+                        sequence=sequence,
+                        methylation_profile=methylation_profile,
                     )
 
 
@@ -348,3 +354,20 @@ def load_and_save_all_cpg_sequences(
             fd.write(",")
             fd.write(str(sequence_info.methylation_profile.ratio_methylated))
             fd.write("\n")
+
+
+def load_methylation_samples(
+    methylation_file: Path, threshold: float = 0.5
+) -> tuple[list[list[Nucleodtide]], list[int]]:
+    sequences: list[list[Nucleodtide]] = []
+    methylation_ratios: list[int] = []
+    with methylation_file.open() as fd:
+        csv_file = DictReader(fd)
+        for row in csv_file:
+            sequence: str = row["sequence"]
+            if "N" in sequences:
+                continue
+            sequences.append(string_to_nucleotides(sequence))
+            methylation_ratios.append(1 if float(row["ratio_methylated"]) > threshold else 0)
+
+    return sequences, methylation_ratios

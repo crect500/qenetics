@@ -5,7 +5,7 @@ from qenetics.tools import cpg_sampler
 
 
 def _parse_script_args() -> Namespace:
-    parser: ArgumentParser = ArgumentParser(
+    parser = ArgumentParser(
         "extract_save_methylation_sequences",
         usage="python3 "
         "extract_save_methylation_sequence.py "
