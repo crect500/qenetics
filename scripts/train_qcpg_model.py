@@ -15,12 +15,6 @@ UNIQUE_NUCLEOTIDE_QUANTITY: int = 4
 
 
 logger = logging.getLogger(__name__)
-formatter = logging.Formatter(
-    "%(asctime)s;%(levelname)s;%(message)s", "%Y-%m-%d %H:%M:%S"
-)
-ch = logging.StreamHandler()
-ch.setFormatter(formatter)
-logger.addHandler(ch)
 
 
 def _parse_script_args() -> Namespace:
@@ -80,14 +74,33 @@ def _parse_script_args() -> Namespace:
         default=1,
         help="The seed for the sample generator.",
     )
+    parser.add_argument(
+        "--log-directory",
+        dest="log_directory",
+        required=False,
+        type=Path,
+        default=None,
+        help="The filepath to the desired log directory",
+    )
 
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args: Namespace = _parse_script_args()
+    if args.log_directory:
+        logging.basicConfig(
+            filename=args.log_directory / "qcpg.log", level=logging.DEBUG
+        )
     sequences, methylation = load_methylation_samples(args.methylation_file)
-    training_sequences, training_methylation, test_sequences, test_methylation = train_test_split(sequences, methylation, random_state=args.seed)
+    (
+        training_sequences,
+        test_sequences,
+        training_methylation,
+        test_methylation,
+    ) = train_test_split(sequences, methylation, random_state=args.seed)
+    logger.info(f"Training with {len(training_sequences)} samples and testing with "
+                f"{len(test_sequences)} samples")
     address_register_size: int = qcpg.calculate_address_register_size(
         len(training_sequences[0])
     )
@@ -98,7 +111,10 @@ if __name__ == "__main__":
     parameters: NDArray = pnp.random.default_rng().random(size=params_shape)
     trained_parameters, loss_history = (
         qcpg.train_strongly_entangled_qcpg_circuit(
-            parameters, training_sequences, training_methylation, args.max_iterations
+            parameters,
+            training_sequences,
+            training_methylation,
+            args.max_iterations,
         )
     )
     np.save(args.output_directory / "model.npy", trained_parameters)

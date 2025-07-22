@@ -14,7 +14,9 @@ from qenetics.tools import cpg_sampler
         (">A dna:nomonome nomosome:abc:A:1:20:1 REF", "A", 20),
     ],
 )
-def test_extract_line_annotations(test_line: str, chromosome: int, length: int) -> None:
+def test_extract_line_annotations(
+    test_line: str, chromosome: int, length: int
+) -> None:
     chromosome_number, info = cpg_sampler.extract_line_annotation(test_line)
     assert chromosome_number == chromosome
     assert info.length == length
@@ -34,7 +36,9 @@ def test_find_next_comment() -> None:
 
 def test_extract_fasfa_metadata() -> None:
     annotations: dict[str, cpg_sampler.SequenceInfo] = (
-        cpg_sampler.extract_fasfa_metadata(Path("tests/test_files/test_sequence.fa"))
+        cpg_sampler.extract_fasfa_metadata(
+            Path("tests/test_files/test_sequence.fa")
+        )
     )
     assert len(annotations) == 2
 
@@ -61,7 +65,9 @@ def test_load_methlation_file_data() -> None:
 
 
 def test_filter_and_calculate_methylation(
-    test_methylation_profiles: dict[str, dict[int, cpg_sampler.MethylationInfo]],
+    test_methylation_profiles: dict[
+        str, dict[int, cpg_sampler.MethylationInfo]
+    ],
 ) -> None:
     filtered_profiles: dict[str, dict[int, cpg_sampler.MethylationInfo]] = (
         cpg_sampler.filter_and_calculate_methylation(test_methylation_profiles)
@@ -70,7 +76,9 @@ def test_filter_and_calculate_methylation(
     assert len(filtered_profiles["1"]) == 3
     assert len(filtered_profiles["2"]) == 1
     assert len(filtered_profiles["X"]) == 1
-    assert filtered_profiles["1"][2].ratio_methylated == pytest.approx(0.67, abs=0.01)
+    assert filtered_profiles["1"][2].ratio_methylated == pytest.approx(
+        0.67, abs=0.01
+    )
 
     filtered_profiles = cpg_sampler.filter_and_calculate_methylation(
         test_methylation_profiles, 2
@@ -140,7 +148,9 @@ def test_find_methylation_sequence(
 def test_retrieve_all_cpg_sequences(
     test_fasfa_file: Path,
     test_fasfa_metadata: dict[str, cpg_sampler.SequenceInfo],
-    test_methylation_profiles: dict[str, dict[int, cpg_sampler.MethylationInfo]],
+    test_methylation_profiles: dict[
+        str, dict[int, cpg_sampler.MethylationInfo]
+    ],
 ) -> None:
     results: list[cpg_sampler.MethylationSequence] = list(
         cpg_sampler.retrieve_all_cpg_sequences(

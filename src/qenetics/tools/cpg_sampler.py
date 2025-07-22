@@ -3,10 +3,13 @@ from __future__ import annotations
 from csv import DictReader
 from dataclasses import dataclass
 from io import TextIOBase
+import logging
 from pathlib import Path
 from typing import Generator
 
 from qenetics.qcpg.qcpg import string_to_nucleotides, Nucleodtide
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -46,7 +49,9 @@ def extract_line_annotation(line: str) -> tuple[str, SequenceInfo]:
 
     return (
         details[2],
-        SequenceInfo(length=int(details[4]), is_chromosome="chromosome" in details),
+        SequenceInfo(
+            length=int(details[4]), is_chromosome="chromosome" in details
+        ),
     )
 
 
@@ -73,7 +78,9 @@ def find_next_comment(file_descriptor: TextIOBase, offset: int) -> bool:
 def determine_line_length(fasfa_file: Path) -> int:
     with fasfa_file.open() as fd:
         if not find_next_comment(fd, 0):
-            raise IOError("Unable to determine sequence line length of FASFA file.")
+            raise IOError(
+                "Unable to determine sequence line length of FASFA file."
+            )
 
         fd.readline()
         return len(fd.readline()) - 1
@@ -106,7 +113,9 @@ def extract_fasfa_metadata(fasfa_file: Path) -> dict[str, SequenceInfo]:
             if newline_quantity == 0:
                 newline_quantity = 1
             read_position = (
-                sequence_info.file_position + sequence_info.length + newline_quantity
+                sequence_info.file_position
+                + sequence_info.length
+                + newline_quantity
             )  # Skip newlines
 
     return annotations
@@ -220,7 +229,10 @@ def _read_sequence(
     sequence: str = file_descriptor.readline().rstrip()
     half_length = int(sequence_length / 2)
     if len(sequence) > included_cg_length:
-        return sequence[:half_length] + sequence[half_length + 2 : included_cg_length]
+        return (
+            sequence[:half_length]
+            + sequence[half_length + 2 : included_cg_length]
+        )
 
     newline_quantity = int((sequence_length - len(sequence)) / line_length)
     sequence += file_descriptor.read(
@@ -341,11 +353,14 @@ def load_and_save_all_cpg_sequences(
             combine_methylation_results(methylation_directory), minimum_count
         )
     )
-    sequences: Generator[MethylationSequence, None, None] = retrieve_all_cpg_sequences(
-        metadata, fasfa_file, methylation_profiles, sequence_length
+    sequences: Generator[MethylationSequence, None, None] = (
+        retrieve_all_cpg_sequences(
+            metadata, fasfa_file, methylation_profiles, sequence_length
+        )
     )
     output_file: Path = (
-        output_directory / f"cpg_sequences_s{sequence_length}_m{minimum_count}.csv"
+        output_directory
+        / f"cpg_sequences_s{sequence_length}_m{minimum_count}.csv"
     )
     with output_file.open("w") as fd:
         fd.write("sequence,ratio_methylated\n")
@@ -359,15 +374,23 @@ def load_and_save_all_cpg_sequences(
 def load_methylation_samples(
     methylation_file: Path, threshold: float = 0.5
 ) -> tuple[list[list[Nucleodtide]], list[int]]:
+    logger.debug(
+        f"Loading methylation data from {methylation_file} with threshold "
+        f"{threshold}."
+    )
     sequences: list[list[Nucleodtide]] = []
     methylation_ratios: list[int] = []
     with methylation_file.open() as fd:
         csv_file = DictReader(fd)
         for row in csv_file:
             sequence: str = row["sequence"]
-            if "N" in sequences:
+            if "N" in sequence:
                 continue
             sequences.append(string_to_nucleotides(sequence))
-            methylation_ratios.append(1 if float(row["ratio_methylated"]) > threshold else 0)
+            methylation_ratios.append(
+                1 if float(row["ratio_methylated"]) > threshold else 0
+            )
+
+    logging.debug(f"Loaded {len(sequences)} methylation samples.")
 
     return sequences, methylation_ratios

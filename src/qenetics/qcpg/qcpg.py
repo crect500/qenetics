@@ -13,12 +13,6 @@ from pennylane import numpy as pnp
 from qenetics.qcpg import qcpg_models
 
 logger = logging.getLogger(__name__)
-formatter = logging.Formatter(
-    "%(asctime)s;%(levelname)s;%(message)s", "%Y-%m-%d %H:%M:%S"
-)
-ch = logging.StreamHandler()
-ch.setFormatter(formatter)
-logger.addHandler(ch)
 
 
 class Nucleodtide(IntEnum):
@@ -61,7 +55,9 @@ def convert_nucleotide_to_enum(nucleotide: str) -> Nucleodtide:
     if nucleotide == "G":
         return Nucleodtide.G
 
-    raise ValueError(f"Chracter {nucleotide} not recognized as valid nucleotide")
+    raise ValueError(
+        f"Chracter {nucleotide} not recognized as valid nucleotide"
+    )
 
 
 def string_to_nucleotides(nucleotide_string: str) -> list[Nucleodtide]:
@@ -76,7 +72,9 @@ def string_to_nucleotides(nucleotide_string: str) -> list[Nucleodtide]:
     -------
     A list of nucleotide enumerations.
     """
-    return [convert_nucleotide_to_enum(character) for character in nucleotide_string]
+    return [
+        convert_nucleotide_to_enum(character) for character in nucleotide_string
+    ]
 
 
 def calculate_address_register_size(values_to_encode: int) -> int:
@@ -134,7 +132,9 @@ def single_encode_all_nucleotides(nucleotides: Iterable[Nucleodtide]) -> None:
     ----
     nucleotides: A sequence of enum-mapped nucleotide values.
     """
-    address_register_size: int = calculate_address_register_size(len(nucleotides))
+    address_register_size: int = calculate_address_register_size(
+        len(nucleotides)
+    )
     for index, nucleotide in enumerate(nucleotides):
         single_encode_nucleotide(nucleotide, index, address_register_size)
 
@@ -157,7 +157,8 @@ def amplitude_encode_nucleotide(
         controls = [0] * (address_register_size - len(controls)) + controls
     if nucleotide == Nucleodtide.T or nucleotide == Nucleodtide.G:
         qml.MultiControlledX(
-            wires=list(range(address_register_size)) + [address_register_size + 1],
+            wires=list(range(address_register_size))
+            + [address_register_size + 1],
             control_values=controls,
         )
     if nucleotide == Nucleodtide.C or nucleotide == Nucleodtide.G:
@@ -177,7 +178,9 @@ def amplitude_encode_all_nucleotides(
     ----
     nucleotides: A sequence of enum-mapped nucleotide values.
     """
-    address_register_size: int = calculate_address_register_size(len(nucleotides))
+    address_register_size: int = calculate_address_register_size(
+        len(nucleotides)
+    )
     for index, nucleotide in enumerate(nucleotides):
         amplitude_encode_nucleotide(nucleotide, index, address_register_size)
 
@@ -185,10 +188,15 @@ def amplitude_encode_all_nucleotides(
 def _strongly_entangled_run_calculate_mean_squared_error(
     parameters: NDArray[float],
     nucleotides: list[Nucleodtide],
-    target: NDArray[int],
+    target: int,
 ) -> NDArray[float]:
+    logging.debug(
+        f"Training sequence {str(nucleotides)} with methhylation {target}"
+    )
     data_register_size: int = 4
-    address_register_size: int = calculate_address_register_size(len(nucleotides))
+    address_register_size: int = calculate_address_register_size(
+        len(nucleotides)
+    )
     circuit_width: int = address_register_size + data_register_size
     device = qml.device("default.qubit", wires=circuit_width)
 
@@ -201,7 +209,8 @@ def _strongly_entangled_run_calculate_mean_squared_error(
         qcpg_models.strongly_entangled_jax(circuit_parameters)
 
         return qml.expval(
-            qml.PauliZ(wires=circuit_width - 2) @ qml.PauliZ(wires=circuit_width - 1)
+            qml.PauliZ(wires=circuit_width - 2)
+            @ qml.PauliZ(wires=circuit_width - 1)
         )
 
     return (_run_circuit(nucleotides, parameters) - pnp.array(target)) ** 2
@@ -209,9 +218,10 @@ def _strongly_entangled_run_calculate_mean_squared_error(
 
 def _strongly_entangled_run_calculate_loss(
     parameters: NDArray[float],
-    nucleotides: list[Nucleodtide],
+    nucleotides: list[list[Nucleodtide]],
     targets: NDArray[int],
 ):
+    logger.debug(f"{len(nucleotides)} sequences and {len(targets)} targets")
     predictions = jnp.array(
         [
             _strongly_entangled_run_calculate_mean_squared_error(
@@ -227,17 +237,17 @@ def _strongly_entangled_run_calculate_loss(
 def _strongly_entangled_run_update_parameters(
     iteration: int,
     parameters: NDArray[float],
-    nucleotides: NDArray[int],
+    nucleotides: list[list[Nucleodtide]],
     targets: NDArray[int],
     optimizer,
     optimizer_state: optax.GradientTransformationExtraArgs,
 ):
-    logging.debug(f"Training loop {iteration}")
-    logging.debug("Executing circuit...")
-    loss_value, grads = jax.value_and_grad(_strongly_entangled_run_calculate_loss)(
-        parameters, nucleotides, targets
-    )
-    logging.debug("Updating parameters...")
+    logging.info(f"Training loop {iteration}")
+    logging.debug("Executing circuit.")
+    loss_value, grads = jax.value_and_grad(
+        _strongly_entangled_run_calculate_loss
+    )(parameters, nucleotides, targets)
+    logging.debug("Updating parameters.")
     updates, optimizer_state = optimizer.update(grads, optimizer_state)
     parameters = optax.apply_updates(parameters, updates)
 
@@ -246,7 +256,7 @@ def _strongly_entangled_run_update_parameters(
 
 def train_strongly_entangled_qcpg_circuit(
     parameters: NDArray[float],
-    nucleotides: list[Nucleodtide],
+    nucleotides: list[list[Nucleodtide]],
     targets: NDArray[int],
     max_steps: int = 50,
 ):
@@ -254,13 +264,15 @@ def train_strongly_entangled_qcpg_circuit(
     loss_history: list[float] = list()
     opt_state = optimizer.init(parameters)
     for iteration in range(max_steps):
-        parameters, opt_state, loss_value = _strongly_entangled_run_update_parameters(
-            iteration,
-            parameters,
-            nucleotides,
-            targets,
-            optimizer,
-            opt_state,
+        parameters, opt_state, loss_value = (
+            _strongly_entangled_run_update_parameters(
+                iteration,
+                parameters,
+                nucleotides,
+                targets,
+                optimizer,
+                opt_state,
+            )
         )
         loss_history.append(loss_value)
 

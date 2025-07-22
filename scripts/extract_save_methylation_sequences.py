@@ -73,7 +73,9 @@ if __name__ == "__main__":
         for minimum_count in args.minimum_count:
             cpg_sampler.load_and_save_all_cpg_sequences(
                 fasfa_file=args.fasfa_file,
-                methylation_directory=list(args.methylation_directory.iterdir()),
+                methylation_directory=list(
+                    args.methylation_directory.iterdir()
+                ),
                 sequence_length=sequence_length,
                 output_directory=args.output_directory,
                 minimum_count=minimum_count,
