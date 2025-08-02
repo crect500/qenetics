@@ -1,16 +1,18 @@
 from enum import IntEnum
 import logging
 from math import ceil, log2
+from pathlib import Path
 from typing import Iterable
 
 import jax
 from jax import numpy as jnp
+import numpy as np
 from numpy.typing import NDArray
 import optax
 import pennylane as qml
-from pennylane import numpy as pnp
 
 from qenetics.qcpg import qcpg_models
+from qenetics.tools import metrics
 
 logger = logging.getLogger(__name__)
 
@@ -185,7 +187,7 @@ def amplitude_encode_all_nucleotides(
         amplitude_encode_nucleotide(nucleotide, index, address_register_size)
 
 
-def _strongly_entangled_run_calculate_mean_squared_error(
+def _strongly_entangled_run_circuit(
     parameters: NDArray[float],
     nucleotides: list[Nucleodtide],
     target: int,
@@ -213,7 +215,13 @@ def _strongly_entangled_run_calculate_mean_squared_error(
             @ qml.PauliZ(wires=circuit_width - 1)
         )
 
-    return (_run_circuit(nucleotides, parameters) - pnp.array(target)) ** 2
+    return _run_circuit(nucleotides, parameters)
+
+
+def _calculate_squared_error(
+    result: NDArray[float], target: NDArray[float]
+) -> NDArray[float]:
+    return (result - target) ** 2
 
 
 def _strongly_entangled_run_calculate_loss(
@@ -224,8 +232,9 @@ def _strongly_entangled_run_calculate_loss(
     logger.debug(f"{len(nucleotides)} sequences and {len(targets)} targets")
     predictions = jnp.array(
         [
-            _strongly_entangled_run_calculate_mean_squared_error(
-                parameters, sequence, target
+            _calculate_squared_error(
+                _strongly_entangled_run_circuit(parameters, sequence, target),
+                target,
             )
             for (sequence, target) in zip(nucleotides, targets, strict=True)
         ]
@@ -254,26 +263,66 @@ def _strongly_entangled_run_update_parameters(
     return (parameters, optimizer_state, loss_value)
 
 
+def _evaluate_test_performance(
+    parameters: NDArray[float],
+    test_sequences: list[list[Nucleodtide]],
+    test_methylations: NDArray[int],
+    threshold: float = 0.5,
+) -> metrics.Metrics:
+    scaled_threshold: float = threshold * 2 - 1.0
+    normalized_truth: NDArray[int] = np.array(
+        [0 if truth == -1 else 1 for truth in test_methylations], dtype=int
+    )
+    predictions = np.array(
+        [
+            0
+            if _strongly_entangled_run_circuit(
+                parameters, sequence, methylation
+            )
+            < scaled_threshold
+            else 1
+            for (sequence, methylation) in zip(
+                test_sequences, test_methylations, strict=True
+            )
+        ],
+        dtype=int,
+    )
+    return metrics.generate_metrics(predictions, normalized_truth)
+
+
 def train_strongly_entangled_qcpg_circuit(
     parameters: NDArray[float],
-    nucleotides: list[list[Nucleodtide]],
-    targets: NDArray[int],
+    training_nucleotides: list[list[Nucleodtide]],
+    training_targets: NDArray[int],
+    test_nucleotides: list[list[Nucleodtide]],
+    test_targets: NDArray[int],
+    output_file: Path,
     max_steps: int = 50,
 ):
-    optimizer = optax.adam(learning_rate=0.05)
-    loss_history: list[float] = list()
-    opt_state = optimizer.init(parameters)
-    for iteration in range(max_steps):
-        parameters, opt_state, loss_value = (
-            _strongly_entangled_run_update_parameters(
-                iteration,
-                parameters,
-                nucleotides,
-                targets,
-                optimizer,
-                opt_state,
+    logger.info(f"Saving results to {output_file}")
+    with output_file.open("w") as fd:
+        fd.write(f"iteration,loss,{metrics.METRICS_HEADERS}\n")
+        optimizer = optax.adam(learning_rate=0.05)
+        loss_history: list[float] = list()
+        opt_state = optimizer.init(parameters)
+        for iteration in range(max_steps):
+            parameters, opt_state, loss_value = (
+                _strongly_entangled_run_update_parameters(
+                    iteration,
+                    parameters,
+                    training_nucleotides,
+                    training_targets,
+                    optimizer,
+                    opt_state,
+                )
             )
-        )
-        loss_history.append(loss_value)
+            result_metrics: metrics.Metrics = _evaluate_test_performance(
+                parameters, test_nucleotides, test_targets
+            )
+            fd.write(
+                f"{iteration},"
+                f"{str(loss_value)},"
+                f"{(metrics.metrics_to_csv_row(result_metrics))}\n"
+            )
 
     return parameters, loss_history

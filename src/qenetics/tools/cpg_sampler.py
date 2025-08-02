@@ -388,7 +388,7 @@ def load_methylation_samples(
                 continue
             sequences.append(string_to_nucleotides(sequence))
             methylation_ratios.append(
-                1 if float(row["ratio_methylated"]) > threshold else 0
+                1 if float(row["ratio_methylated"]) > threshold else -1
             )
 
     logging.debug(f"Loaded {len(sequences)} methylation samples.")

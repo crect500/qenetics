@@ -90,7 +90,7 @@ if __name__ == "__main__":
     args: Namespace = _parse_script_args()
     if args.log_directory:
         logging.basicConfig(
-            filename=args.log_directory / "qcpg.log", level=logging.DEBUG
+            filename=args.log_directory / "qcpg.log", level=logging.INFO
         )
     sequences, methylation = load_methylation_samples(args.methylation_file)
     (
@@ -99,8 +99,10 @@ if __name__ == "__main__":
         training_methylation,
         test_methylation,
     ) = train_test_split(sequences, methylation, random_state=args.seed)
-    logger.info(f"Training with {len(training_sequences)} samples and testing with "
-                f"{len(test_sequences)} samples")
+    logger.info(
+        f"Training with {len(training_sequences)} samples and testing with "
+        f"{len(test_sequences)} samples"
+    )
     address_register_size: int = qcpg.calculate_address_register_size(
         len(training_sequences[0])
     )
@@ -109,17 +111,16 @@ if __name__ == "__main__":
         n_wires=address_register_size + UNIQUE_NUCLEOTIDE_QUANTITY,
     )
     parameters: NDArray = pnp.random.default_rng().random(size=params_shape)
+    metrics_file: Path = args.output_directory / "metrics.csv"
     trained_parameters, loss_history = (
         qcpg.train_strongly_entangled_qcpg_circuit(
             parameters,
             training_sequences,
             training_methylation,
+            test_sequences,
+            test_methylation,
+            metrics_file,
             args.max_iterations,
         )
     )
     np.save(args.output_directory / "model.npy", trained_parameters)
-    loss_file: Path = args.output_directory / "loss_history.txt"
-    with loss_file.open("w") as fd:
-        for loss in loss_history:
-            fd.write(str(loss))
-            fd.write("\n")
