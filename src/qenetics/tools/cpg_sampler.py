@@ -14,6 +14,15 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class SequenceInfo:
+    """
+    Stores information about one sequence in a FASFA file.
+
+    Attributes
+    ----------
+    length: The number of nucleotides in the sequence.
+    is_chromosome: Flags whether the sequence is part of a chromosome or not.
+    file_position: The start position of the sequence in the FASFA file.
+    """
     length: int
     is_chromosome: bool
     file_position: int = 0
@@ -21,6 +30,17 @@ class SequenceInfo:
 
 @dataclass
 class MethylationInfo:
+    """
+    Stores information about methylation experiments.
+
+    Attributes
+    ----------
+    count_methylated: The number of experiments that found the CpG site to be
+     methylated.
+    count_non_methylated: The number of experiments that found the CpG site to not be
+     methylated.
+    ratio_methylated: The fraction of the total experiments that were methylated.
+    """
     count_methylated: int
     count_non_methylated: int
     ratio_methylated: float = -1.0
@@ -28,6 +48,15 @@ class MethylationInfo:
 
 @dataclass
 class MethylationSequence:
+    """
+    A struct that stores both the nucleotide sequence and methylation data.
+
+    Attributes
+    ----------
+    sequence: The sequence of nucleotides (A, C, T, or G).
+    methylation_profile: The experimental results of sampling a CpG site for
+     methylation.
+    """
     sequence: str
     methylation_profile: MethylationInfo
 
@@ -76,6 +105,17 @@ def find_next_comment(file_descriptor: TextIOBase, offset: int) -> bool:
 
 
 def determine_line_length(fasfa_file: Path) -> int:
+    """
+    Find the standard line length of the nucleotide data in the file.
+
+    Args
+    ----
+    fasfa_file: The reference genome file, in FASFA format.
+
+    Returns
+    -------
+    The length of the first line of the first nucleotide sequence.
+    """
     with fasfa_file.open() as fd:
         if not find_next_comment(fd, 0):
             raise IOError(
@@ -224,6 +264,19 @@ def filter_and_calculate_methylation(
 def _read_sequence(
     file_descriptor: TextIOBase, sequence_length: int, line_length: int
 ) -> str | None:
+    """
+    Read a sequence of nucleotides from a FASFA file.
+
+    Args
+    ----
+    file_descriptor: The file descriptor, already open for reading ASCII data.
+    sequence_length: The length of the sequence to extract.
+    line_length: The length of a line of nucleotide data in the FASFA file.
+
+    Returns
+    -------
+    A sequence of nucleotides, if valid. Otherwise, returns None.
+    """
     cg_length: int = 2
     included_cg_length: int = sequence_length + cg_length
     sequence: str = file_descriptor.readline().rstrip()
@@ -265,10 +318,11 @@ def find_methylation_sequence(
     genome_metadata: The reference genome file metadata.
     file_descriptor: An open ASCII file descriptor for reference genome.
     sequence_length: The length of sequence to retrieve.
+    line_length: The length of a line of nucleotide data in the FASFA file.
 
     Returns
     -------
-    The sequence, if possible. If not, None.
+    A sequence of nucleotides, if valid. Otherwise, returns None.
     """
     if not genome_metadata.get(chromosome):
         return None
@@ -374,6 +428,18 @@ def load_and_save_all_cpg_sequences(
 def load_methylation_samples(
     methylation_file: Path, threshold: float = 0.5
 ) -> tuple[list[list[Nucleodtide]], list[int]]:
+    """
+    Load all sequences and their associated methylation ratios from a file.
+
+    Args
+    ----
+    methylation_file: A file storing sequences and methylation ratios.
+    threshold: The threshold for which to consider a CpG site methylated.
+
+    Returns
+    -------
+    The sequences and their associated methylation ratios.
+    """
     logger.debug(
         f"Loading methylation data from {methylation_file} with threshold "
         f"{threshold}."

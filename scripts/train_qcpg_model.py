@@ -112,7 +112,7 @@ if __name__ == "__main__":
     )
     parameters: NDArray = pnp.random.default_rng().random(size=params_shape)
     metrics_file: Path = args.output_directory / "metrics.csv"
-    trained_parameters, loss_history = (
+    trained_parameters, loss_history, metrics_history = (
         qcpg.train_strongly_entangled_qcpg_circuit(
             parameters,
             training_sequences,
@@ -123,4 +123,7 @@ if __name__ == "__main__":
             args.max_iterations,
         )
     )
+    with metrics_file.open("wa") as fd:
+        for loss, test_metrics in zip(loss_history, metrics_history, strict=True):
+            fd.write(f"Metrics: {test_metrics}\nLoss: {loss}\n")
     np.save(args.output_directory / "model.npy", trained_parameters)

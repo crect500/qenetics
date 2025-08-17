@@ -189,15 +189,27 @@ def amplitude_encode_all_nucleotides(
 
 def _strongly_entangled_run_circuit(
     parameters: NDArray[float],
-    nucleotides: list[Nucleodtide],
-    target: int,
-) -> NDArray[float]:
+    sequence: list[Nucleodtide],
+) -> float:
+    """
+    Run a qcpg circuit with a StronglyEntangled ansatz as the underlying model.
+
+
+    Args
+    ----
+    parameters: The parameters for the ansatz.
+    sequence: The nucleotide sequence to encode in the circuit.
+
+    Returns
+    -------
+
+    """
     logging.debug(
-        f"Training sequence {str(nucleotides)} with methhylation {target}"
+        f"Training on sequence {str(sequence)}"
     )
     data_register_size: int = 4
     address_register_size: int = calculate_address_register_size(
-        len(nucleotides)
+        len(sequence)
     )
     circuit_width: int = address_register_size + data_register_size
     device = qml.device("default.qubit", wires=circuit_width)
@@ -215,28 +227,32 @@ def _strongly_entangled_run_circuit(
             @ qml.PauliZ(wires=circuit_width - 1)
         )
 
-    return _run_circuit(nucleotides, parameters)
-
-
-def _calculate_squared_error(
-    result: NDArray[float], target: NDArray[float]
-) -> NDArray[float]:
-    return (result - target) ** 2
+    return _run_circuit(sequence, parameters)
 
 
 def _strongly_entangled_run_calculate_loss(
     parameters: NDArray[float],
-    nucleotides: list[list[Nucleodtide]],
-    targets: NDArray[int],
-):
-    logger.debug(f"{len(nucleotides)} sequences and {len(targets)} targets")
+    sequences: list[list[Nucleodtide]],
+    methylations: NDArray[int],
+) -> jax.Array:
+    """
+    Run circuit and calculate loss.
+
+    Args
+    ----
+    parameters: The current parameters of the ansatz.
+    sequences: The sequence samples.
+    methylations: The associated methylation truth for each sample.
+
+    Returns
+    -------
+    The mean of the losses for the batch.
+    """
+    logger.debug(f"{len(sequences)} sequences and {len(methylations)} methylations")
     predictions = jnp.array(
         [
-            _calculate_squared_error(
-                _strongly_entangled_run_circuit(parameters, sequence, target),
-                target,
-            )
-            for (sequence, target) in zip(nucleotides, targets, strict=True)
+            (_strongly_entangled_run_circuit(parameters, sequence) - methylation)**2
+            for (sequence, methylation) in zip(sequences, methylations, strict=True)
         ]
     )
     loss: jax.Array = jnp.mean(predictions)
@@ -244,23 +260,34 @@ def _strongly_entangled_run_calculate_loss(
 
 
 def _strongly_entangled_run_update_parameters(
-    iteration: int,
     parameters: NDArray[float],
-    nucleotides: list[list[Nucleodtide]],
-    targets: NDArray[int],
-    optimizer,
+    sequences: list[list[Nucleodtide]],
+    methylations: NDArray[int],
+    optimizer: optax.GradientTransformationExtraArgs,
     optimizer_state: optax.GradientTransformationExtraArgs,
-):
-    logging.info(f"Training loop {iteration}")
+) -> tuple[jax.Array, optax.GradientTransformationExtraArgs, jax.Array]:
+    """
+    Update the parameters for the qcpg circuit.
+
+    parameters: The circuit parameters.
+    sequences: The list of sequences to train the circuit on.
+    methylations: The methylation truth associated with each sequence.
+    optimizer: The chosen optimizer.
+    optimizer_state: The current state of the optimizer.
+
+    Returns
+    -------
+    The parameters, current optimizer state, and loss value of the iteration.
+    """
     logging.debug("Executing circuit.")
     loss_value, grads = jax.value_and_grad(
         _strongly_entangled_run_calculate_loss
-    )(parameters, nucleotides, targets)
+    )(parameters, sequences, methylations)
     logging.debug("Updating parameters.")
     updates, optimizer_state = optimizer.update(grads, optimizer_state)
     parameters = optax.apply_updates(parameters, updates)
 
-    return (parameters, optimizer_state, loss_value)
+    return parameters, optimizer_state, loss_value
 
 
 def _evaluate_test_performance(
@@ -269,6 +296,18 @@ def _evaluate_test_performance(
     test_methylations: NDArray[int],
     threshold: float = 0.5,
 ) -> metrics.Metrics:
+    """
+    Evaluate the current performance metrics at the current iteration.
+
+    parameters: The circuit parameters.
+    test_sequences: The list of sequences in the test set.
+    test_methylations: The methylation truth associated with each sequence.
+    threshold: The threshold at which to consider a circuit result positive.
+
+    Returns
+    -------
+    The performance metrics.
+    """
     scaled_threshold: float = threshold * 2 - 1.0
     normalized_truth: NDArray[int] = np.array(
         [0 if truth == -1 else 1 for truth in test_methylations], dtype=int
@@ -277,7 +316,7 @@ def _evaluate_test_performance(
         [
             0
             if _strongly_entangled_run_circuit(
-                parameters, sequence, methylation
+                parameters, sequence
             )
             < scaled_threshold
             else 1
@@ -292,37 +331,55 @@ def _evaluate_test_performance(
 
 def train_strongly_entangled_qcpg_circuit(
     parameters: NDArray[float],
-    training_nucleotides: list[list[Nucleodtide]],
-    training_targets: NDArray[int],
-    test_nucleotides: list[list[Nucleodtide]],
-    test_targets: NDArray[int],
+    training_sequences: list[list[Nucleodtide]],
+    training_methylations: NDArray[int],
+    test_sequences: list[list[Nucleodtide]],
+    test_methylations: NDArray[int],
     output_file: Path,
     max_steps: int = 50,
-):
+) -> tuple[NDArray[float], list[float], list[metrics.Metrics]]:
+    """
+    Train a qcpg circuit given training and test sets.
+
+    parameters: The initial circuit parameters.
+    training_sequences: The list of sequences to train on.
+    training_methylations: The methylation truth associated with the training sequences.
+    test_sequences: The list of sequences to use as a test set.
+    test_methylations: The methylation truth associated with the test sequences.
+    output_file: The filepath in which to store the training results.
+    max_steps: The maximum training iterations.
+
+    Returns
+    -------
+    The final parameters, the loss history, and the performance metrics history.
+    """
     logger.info(f"Saving results to {output_file}")
     with output_file.open("w") as fd:
         fd.write(f"iteration,loss,{metrics.METRICS_HEADERS}\n")
         optimizer = optax.adam(learning_rate=0.05)
         loss_history: list[float] = list()
+        metrics_history: list[metrics.Metrics] = []
         opt_state = optimizer.init(parameters)
         for iteration in range(max_steps):
+            logging.info(f"Training loop {iteration}")
             parameters, opt_state, loss_value = (
                 _strongly_entangled_run_update_parameters(
-                    iteration,
                     parameters,
-                    training_nucleotides,
-                    training_targets,
+                    training_sequences,
+                    training_methylations,
                     optimizer,
                     opt_state,
                 )
             )
             result_metrics: metrics.Metrics = _evaluate_test_performance(
-                parameters, test_nucleotides, test_targets
+                parameters, test_sequences, test_methylations
             )
             fd.write(
                 f"{iteration},"
                 f"{str(loss_value)},"
                 f"{(metrics.metrics_to_csv_row(result_metrics))}\n"
             )
+            loss_history.append(float(loss_value))
+            metrics_history.append(result_metrics)
 
-    return parameters, loss_history
+    return parameters, loss_history, metrics_history
