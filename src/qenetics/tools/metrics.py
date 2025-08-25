@@ -32,11 +32,12 @@ class Metrics:
 
 
 def calculate_accuracy(confusion_matrix: ConfusionMatrix) -> float:
-    denominator: float = (confusion_matrix.true_positives
+    denominator: float = (
+        confusion_matrix.true_positives
         + confusion_matrix.false_positives
         + confusion_matrix.false_negatives
         + confusion_matrix.true_negatives
-                          )
+    )
     if denominator == 0.0:
         return denominator
     return (
@@ -45,14 +46,18 @@ def calculate_accuracy(confusion_matrix: ConfusionMatrix) -> float:
 
 
 def calculate_tpr(confusion_matrix: ConfusionMatrix) -> float:
-    denominator: float = confusion_matrix.true_positives + confusion_matrix.false_negatives
+    denominator: float = (
+        confusion_matrix.true_positives + confusion_matrix.false_negatives
+    )
     if denominator == 0.0:
         return denominator
     return confusion_matrix.true_positives / denominator
 
 
 def calculate_fpr(confusion_matrix: ConfusionMatrix) -> float:
-    denominator: float = confusion_matrix.true_negatives + confusion_matrix.false_positives
+    denominator: float = (
+        confusion_matrix.true_negatives + confusion_matrix.false_positives
+    )
     if denominator == 0.0:
         return denominator
     return confusion_matrix.true_negatives / denominator
@@ -60,17 +65,13 @@ def calculate_fpr(confusion_matrix: ConfusionMatrix) -> float:
 
 def calculate_f1_score(confusion_matrix: ConfusionMatrix) -> float:
     denominator: float = (
-            2 * confusion_matrix.true_positives
-            + confusion_matrix.false_positives
-            + confusion_matrix.false_negatives
-        )
+        2 * confusion_matrix.true_positives
+        + confusion_matrix.false_positives
+        + confusion_matrix.false_negatives
+    )
     if denominator == 0.0:
         return denominator
-    return (
-        2
-        * confusion_matrix.true_positives
-        / denominator
-    )
+    return 2 * confusion_matrix.true_positives / denominator
 
 
 def generate_confusion_matrix(

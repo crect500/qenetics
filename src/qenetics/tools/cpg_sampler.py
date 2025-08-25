@@ -23,6 +23,7 @@ class SequenceInfo:
     is_chromosome: Flags whether the sequence is part of a chromosome or not.
     file_position: The start position of the sequence in the FASFA file.
     """
+
     length: int
     is_chromosome: bool
     file_position: int = 0
@@ -41,6 +42,7 @@ class MethylationInfo:
      methylated.
     ratio_methylated: The fraction of the total experiments that were methylated.
     """
+
     count_methylated: int
     count_non_methylated: int
     ratio_methylated: float = -1.0
@@ -57,6 +59,7 @@ class MethylationSequence:
     methylation_profile: The experimental results of sampling a CpG site for
      methylation.
     """
+
     sequence: str
     methylation_profile: MethylationInfo
 

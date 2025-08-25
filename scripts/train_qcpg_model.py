@@ -124,6 +124,8 @@ if __name__ == "__main__":
         )
     )
     with metrics_file.open("wa") as fd:
-        for loss, test_metrics in zip(loss_history, metrics_history, strict=True):
+        for loss, test_metrics in zip(
+            loss_history, metrics_history, strict=True
+        ):
             fd.write(f"Metrics: {test_metrics}\nLoss: {loss}\n")
     np.save(args.output_directory / "model.npy", trained_parameters)

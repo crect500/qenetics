@@ -204,13 +204,9 @@ def _strongly_entangled_run_circuit(
     -------
 
     """
-    logging.debug(
-        f"Training on sequence {str(sequence)}"
-    )
+    logging.debug(f"Training on sequence {str(sequence)}")
     data_register_size: int = 4
-    address_register_size: int = calculate_address_register_size(
-        len(sequence)
-    )
+    address_register_size: int = calculate_address_register_size(len(sequence))
     circuit_width: int = address_register_size + data_register_size
     device = qml.device("default.qubit", wires=circuit_width)
 
@@ -248,11 +244,19 @@ def _strongly_entangled_run_calculate_loss(
     -------
     The mean of the losses for the batch.
     """
-    logger.debug(f"{len(sequences)} sequences and {len(methylations)} methylations")
+    logger.debug(
+        f"{len(sequences)} sequences and {len(methylations)} methylations"
+    )
     predictions = jnp.array(
         [
-            (_strongly_entangled_run_circuit(parameters, sequence) - methylation)**2
-            for (sequence, methylation) in zip(sequences, methylations, strict=True)
+            (
+                _strongly_entangled_run_circuit(parameters, sequence)
+                - methylation
+            )
+            ** 2
+            for (sequence, methylation) in zip(
+                sequences, methylations, strict=True
+            )
         ]
     )
     loss: jax.Array = jnp.mean(predictions)
@@ -315,9 +319,7 @@ def _evaluate_test_performance(
     predictions = np.array(
         [
             0
-            if _strongly_entangled_run_circuit(
-                parameters, sequence
-            )
+            if _strongly_entangled_run_circuit(parameters, sequence)
             < scaled_threshold
             else 1
             for (sequence, methylation) in zip(
