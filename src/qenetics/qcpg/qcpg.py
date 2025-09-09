@@ -27,9 +27,9 @@ class Nucleodtide(IntEnum):
     G - 3
     """
 
-    A = (0,)
-    T = (1,)
-    C = (2,)
+    A = 0
+    T = 1
+    C = 2
     G = 3
 
 

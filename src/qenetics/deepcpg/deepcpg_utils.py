@@ -6,6 +6,8 @@ from dataclasses import dataclass
 import logging
 from pathlib import Path
 
+from qenetics.tools import cpg_sampler
+
 logger = logging.getLogger(__name__)
 
 
@@ -22,7 +24,7 @@ class MethylationInfo:
     experiment_count: The number of experiments performed.
     """
 
-    chromosome: int
+    chromosome: str
     position: int
     methylation_ratio: float
     experiment_count: int
@@ -43,9 +45,6 @@ def _process_methylation_line(
     The methylation information, if a numbered chromosome. None otherwise.
     """
     line_split: list[str] = line.rstrip().split("\t")
-    if not line_split[0].isnumeric():
-        logger.debug(f"Chromosome {line_split[0]} is not numeric.")
-        return None
 
     count_methylated = int(line_split[4])
     count_unmethylated = int(line_split[5])
@@ -55,7 +54,7 @@ def _process_methylation_line(
         return None
 
     return MethylationInfo(
-        chromosome=int(line_split[0]),
+        chromosome=line_split[0],
         position=int(line_split[1]),
         methylation_ratio=count_methylated / total_experiments,
         experiment_count=total_experiments,
@@ -80,14 +79,14 @@ def retrieve_methylation_data(
     with open(methylation_filepath) as fd:
         for line in fd.readlines():
             methylation_information: MethylationInfo | None = (
-                _process_methylation_line(line),
-                minimum_samples,
+                _process_methylation_line(line, minimum_samples)
             )
-            if (
-                methylation_information
-                and methylation_information.methylation_ratio >= threshold
-            ):
-                yield methylation_information
+            if not methylation_information:
+                continue
+            if methylation_information.methylation_ratio < threshold:
+                continue
+
+            yield methylation_information
 
 
 def _write_deepcpg_methylation(
@@ -129,3 +128,46 @@ def write_all_deepcpg_methylations(
             methylation_filepath, minimum_samples, threshold
         ):
             _write_deepcpg_methylation(fd, methylation_profile, threshold)
+
+
+def _write_sequence_row(
+    file_descriptor: io.TextIOBase,
+    sequence: str,
+    methylation_profile: MethylationInfo,
+) -> None:
+    file_descriptor.write(sequence)
+    file_descriptor.write(",")
+    file_descriptor.write(str(methylation_profile.methylation_ratio))
+    file_descriptor.write("\n")
+
+
+def create_sequence_dataset(
+    methylation_filepath: Path,
+    fasfa_file: Path,
+    sequence_length: int,
+    chromosomes: list[str],
+    minimum_samples: int,
+    output_file: Path,
+) -> None:
+    metadata: dict[str, cpg_sampler.SequenceInfo] = (
+        cpg_sampler.extract_fasfa_metadata(fasfa_file)
+    )
+    line_length: int = cpg_sampler.determine_line_length(fasfa_file)
+    with open(output_file, "w") as output_fd, open(fasfa_file) as fasfa_fd:
+        output_fd.write("sequence,methylation\n")
+        for methylation_profile in retrieve_methylation_data(
+            methylation_filepath, minimum_samples
+        ):
+            if methylation_profile.chromosome in chromosomes:
+                sequence: str | None = cpg_sampler.find_methylation_sequence(
+                    methylation_profile.chromosome,
+                    methylation_profile.position,
+                    metadata,
+                    fasfa_fd,
+                    sequence_length,
+                    line_length,
+                )
+                if sequence:
+                    _write_sequence_row(
+                        output_fd, sequence, methylation_profile
+                    )

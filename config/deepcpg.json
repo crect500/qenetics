@@ -1,0 +1,5 @@
+{
+  "layer_decays": [0.95, 0.95],
+  "dropout_rate": 0.0,
+  "trainable": ["conv1", "conv2", "dense"]
+}

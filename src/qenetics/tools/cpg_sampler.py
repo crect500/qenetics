@@ -7,6 +7,9 @@ import logging
 from pathlib import Path
 from typing import Generator
 
+import numpy as np
+from numpy.typing import NDArray
+
 from qenetics.qcpg.qcpg import string_to_nucleotides, Nucleodtide
 
 logger = logging.getLogger(__name__)
@@ -139,7 +142,7 @@ def extract_fasfa_metadata(fasfa_file: Path) -> dict[str, SequenceInfo]:
 
     Returns
     -------
-    The chromosome number, length, and sequence start position in the file.
+    The FASFA metadata indexed by chromosome.
     """
     annotations: dict[str, SequenceInfo] = {}
 
@@ -463,3 +466,37 @@ def load_methylation_samples(
     logging.debug(f"Loaded {len(sequences)} methylation samples.")
 
     return sequences, methylation_ratios
+
+
+def nucleotide_to_numpy(nucleotide: Nucleodtide) -> NDArray[int]:
+    """
+    Convert a Nucleotide object to a one-hot encoded array.
+
+    Args
+    ----
+    nucleotide:
+
+    Returns
+    -------
+    The one-hot encoded array.
+    """
+    one_hot_array: NDArray[int] = np.array([0] * 4)
+    one_hot_array[nucleotide.value] = 1
+    return one_hot_array
+
+
+def sequence_to_numpy(sequence: list[Nucleodtide]) -> NDArray[int]:
+    """
+    Convert a sequence of nucleotides to an array of one-hot encoded arrays.
+
+    Args
+    ----
+    sequence: The nucleotide sequence.
+
+    Returns
+    -------
+    The two-dimensional, one-hot encoded array.
+    """
+    return np.array(
+        [nucleotide_to_numpy(nucleotide) for nucleotide in sequence]
+    )
