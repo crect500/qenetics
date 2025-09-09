@@ -32,7 +32,9 @@ def _get_sequence_length(input_data: NDArray[int]) -> int:
 
 
 def _build_model(
-    input_file: Path, config: TrainingConfig, model_filepath: Path | None = None
+    input_data: NDArray[int],
+    config: TrainingConfig,
+    model_filepath: Path | None = None,
 ) -> Model:
     if model_filepath is not None:
         logger.info("Loading existing DNA model ...")
@@ -43,7 +45,7 @@ def _build_model(
             l2_decay=config.layer_decays[1],
             dropout=config.dropout_rate,
         )
-        sequence_length = _get_sequence_length(input_file)
+        sequence_length = _get_sequence_length(input_data)
         dna_inputs = dna_model_builder.inputs(sequence_length)
         dna_model = dna_model_builder(dna_inputs)
 
@@ -53,34 +55,24 @@ def _build_model(
 
 
 def train_model(
-    train_filepath: Path,
-    validation_filepath: Path,
-    config: TrainingConfig,
+    training_sequences: NDArray[int],
+    training_methylations: NDArray[int],
+    validation_sequences: NDArray[int],
+    validation_methylation: NDArray[int],
+    layer_decays: list[float],
     output_filepath: Path,
     model_filepath: Path | None = None,
 ) -> None:
-    train_sequences, train_methylation = load_methylation_samples(
-        train_filepath
-    )
-    train_input: NDArray[int] = np.array(
-        [sequence_to_numpy(sequence) for sequence in train_sequences], dtype=int
-    )
-    validation_sequences, validation_methylation = load_methylation_samples(
-        validation_filepath
-    )
-    validation_input: NDArray[int] = np.array(
-        [sequence_to_numpy(sequence) for sequence in validation_sequences],
-        dtype=int,
-    )
-    model: Model = _build_model(train_filepath, config, model_filepath)
+    config = TrainingConfig(layer_decays)
+    model: Model = _build_model(training_sequences, config, model_filepath)
     optimizer = optimizers.Adam(learning_rate=config.learning_rate)
     model.compile(
         optimizer=optimizer, loss=BinaryCrossentropy(), metrics=CLA_METRICS
     )
     model.fit(
-        train_input,
-        np.array(train_methylation),
+        training_sequences,
+        training_methylations,
         batch_size=config.batch_size,
-        validation_data=(validation_input, np.array(validation_methylation)),
+        validation_data=(validation_sequences, validation_methylation),
     )
     model.save(output_filepath)

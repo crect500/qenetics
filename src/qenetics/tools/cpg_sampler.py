@@ -432,7 +432,7 @@ def load_and_save_all_cpg_sequences(
 
 
 def load_methylation_samples(
-    methylation_file: Path, threshold: float = 0.5
+    methylation_file: Path, threshold: float = 0.5, negative_state: int = 0
 ) -> tuple[list[list[Nucleodtide]], list[int]]:
     """
     Load all sequences and their associated methylation ratios from a file.
@@ -441,6 +441,7 @@ def load_methylation_samples(
     ----
     methylation_file: A file storing sequences and methylation ratios.
     threshold: The threshold for which to consider a CpG site methylated.
+    negative_state: The integer to set the negative truth value to.
 
     Returns
     -------
@@ -460,7 +461,9 @@ def load_methylation_samples(
                 continue
             sequences.append(string_to_nucleotides(sequence))
             methylation_ratios.append(
-                1 if float(row["ratio_methylated"]) > threshold else -1
+                1
+                if float(row["ratio_methylated"]) > threshold
+                else negative_state
             )
 
     logging.debug(f"Loaded {len(sequences)} methylation samples.")

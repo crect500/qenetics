@@ -6,7 +6,7 @@ from qenetics.deepcpg.deepcpg_utils import create_sequence_dataset
 
 def _parse_script_args() -> Namespace:
     parser = ArgumentParser(
-        "create_samples",
+        prog="create_samples",
         description="Creates sequence samples from a FASTA "
         "reference genome file and methylation "
         "profiles.",
@@ -50,7 +50,7 @@ def _parse_script_args() -> Namespace:
         dest="output_filepath",
         type=Path,
         required=True,
-        description="The filepath to write the results to.",
+        help="The filepath to write the results to.",
     )
     parser.add_argument(
         "--minimum-samples",
