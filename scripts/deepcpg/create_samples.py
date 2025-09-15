@@ -68,28 +68,28 @@ def _parse_script_args() -> Namespace:
 def create_samples(
     fasta_filepath: Path,
     methylation_filepath: Path,
-    chromosomes: list[int],
+    chromosomes: list[str],
     sequence_length: int,
     output_filepath: Path,
     minimum_samples: int = 1,
 ) -> None:
     create_sequence_dataset(
-        methylation_filepath,
-        fasta_filepath,
-        sequence_length,
-        chromosomes,
-        minimum_samples,
-        output_filepath,
+        methylation_filepath=methylation_filepath,
+        fasta_file=fasta_filepath,
+        sequence_length=sequence_length,
+        chromosomes=chromosomes,
+        minimum_samples=minimum_samples,
+        output_file=output_filepath,
     )
 
 
 if __name__ == "__main__":
     args = _parse_script_args()
     create_samples(
-        args.fasta_filepath,
-        args.methylation_filepath,
-        args.chromosomes,
-        args.sequence_length,
-        args.output_filepath,
-        args.minimum_samples,
+        fasta_filepath=args.fasta_filepath,
+        methylation_filepath=args.methylation_filepath,
+        chromosomes=args.chromosomes,
+        sequence_length=args.sequence_length,
+        output_filepath=args.output_filepath,
+        minimum_samples=args.minimum_samples,
     )

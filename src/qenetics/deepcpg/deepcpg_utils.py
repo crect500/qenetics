@@ -47,7 +47,7 @@ def _process_methylation_line(
     -------
     The methylation information, if a numbered chromosome. None otherwise.
     """
-    line_split: list[str] = line.rstrip().split("\t")
+    line_split: list[str] = line.rstrip().split()
 
     count_methylated = int(line_split[4])
     count_unmethylated = int(line_split[5])
@@ -65,7 +65,7 @@ def _process_methylation_line(
 
 
 def retrieve_methylation_data(
-    methylation_filepath: Path, minimum_samples: int = 1, threshold: float = 0.5
+    methylation_filepath: Path, minimum_samples: int = 1
 ) -> Generator[MethylationInfo, None, None]:
     """
     Create a Generator for MethylationInfo objects from the methylation file.
@@ -73,7 +73,6 @@ def retrieve_methylation_data(
     Args
     ----
     methylation_filepath: The file storing methylation profiles
-    threshold: Optional threshold at which to consider a CpG site methylated.
 
     Returns
     -------
@@ -85,8 +84,6 @@ def retrieve_methylation_data(
                 _process_methylation_line(line, minimum_samples)
             )
             if not methylation_information:
-                continue
-            if methylation_information.methylation_ratio < threshold:
                 continue
 
             yield methylation_information
@@ -146,17 +143,17 @@ def _write_sequence_row(
 
 def create_sequence_dataset(
     methylation_filepath: Path,
-    fasfa_file: Path,
+    fasta_file: Path,
     sequence_length: int,
     chromosomes: list[str],
-    minimum_samples: int,
     output_file: Path,
+    minimum_samples: int = 1,
 ) -> None:
     metadata: dict[str, cpg_sampler.SequenceInfo] = (
-        cpg_sampler.extract_fasfa_metadata(fasfa_file)
+        cpg_sampler.extract_fasta_metadata(fasta_file)
     )
-    line_length: int = cpg_sampler.determine_line_length(fasfa_file)
-    with open(output_file, "w") as output_fd, open(fasfa_file) as fasfa_fd:
+    line_length: int = cpg_sampler.determine_line_length(fasta_file)
+    with open(output_file, "w") as output_fd, open(fasta_file) as fasta_fd:
         output_fd.write("sequence,ratio_methylated\n")
         for methylation_profile in retrieve_methylation_data(
             methylation_filepath, minimum_samples
@@ -166,7 +163,7 @@ def create_sequence_dataset(
                     methylation_profile.chromosome,
                     methylation_profile.position,
                     metadata,
-                    fasfa_fd,
+                    fasta_fd,
                     sequence_length,
                     line_length,
                 )

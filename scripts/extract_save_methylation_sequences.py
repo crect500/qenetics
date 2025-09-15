@@ -9,7 +9,7 @@ def _parse_script_args() -> Namespace:
         "extract_save_methylation_sequences",
         usage="python3 "
         "extract_save_methylation_sequence.py "
-        "-f [fasfa-file] "
+        "-f [fasta-file] "
         "-m [methylation-directory] "
         "-l [sequence-length] "
         "-o [output-directory] "
@@ -20,11 +20,11 @@ def _parse_script_args() -> Namespace:
     )
     parser.add_argument(
         "-f",
-        "--fasfa-file",
-        dest="fasfa_file",
+        "--fasta-file",
+        dest="fasta_file",
         required=True,
         type=Path,
-        help="The filepath of a fasfa reference genome file.",
+        help="The filepath of a fasta reference genome file.",
     )
     parser.add_argument(
         "-m",
@@ -72,7 +72,7 @@ if __name__ == "__main__":
     for sequence_length in args.sequence_length:
         for minimum_count in args.minimum_count:
             cpg_sampler.load_and_save_all_cpg_sequences(
-                fasfa_file=args.fasfa_file,
+                fasta_file=args.fasta_file,
                 methylation_directory=list(
                     args.methylation_directory.iterdir()
                 ),

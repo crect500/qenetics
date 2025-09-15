@@ -6,7 +6,7 @@ from qenetics.tools import cpg_sampler
 
 
 @pytest.fixture
-def test_fasfa_metadata() -> dict[str, cpg_sampler.SequenceInfo]:
+def test_fasta_metadata() -> dict[str, cpg_sampler.SequenceInfo]:
     return {
         "1": cpg_sampler.SequenceInfo(
             length=44, is_chromosome=True, file_position=50
@@ -18,7 +18,7 @@ def test_fasfa_metadata() -> dict[str, cpg_sampler.SequenceInfo]:
 
 
 @pytest.fixture
-def test_fasfa_file() -> Path:
+def test_fasta_file() -> Path:
     return Path("tests/test_files/test_sequence.fa")
 
 

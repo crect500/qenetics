@@ -25,13 +25,13 @@ class TenGenomicsSequenceInfo:
 @dataclass
 class SequenceInfo:
     """
-    Stores information about one sequence in a FASFA file.
+    Stores information about one sequence in a FASTA file.
 
     Attributes
     ----------
     length: The number of nucleotides in the sequence.
     is_chromosome: Flags whether the sequence is part of a chromosome or not.
-    file_position: The start position of the sequence in the FASFA file.
+    file_position: The start position of the sequence in the FASTA file.
     """
 
     length: int
@@ -162,11 +162,11 @@ def write_ensembl_from_tengenomics(
 
 def extract_line_annotation(line: str) -> tuple[str, SequenceInfo]:
     """
-    Extract sequence data info from FASFA data comment line.
+    Extract sequence data info from FASTA data comment line.
 
     Args
     ----
-    line: FASFA data comment line.
+    line: FASTA data comment line.
 
     Returns
     -------
@@ -203,46 +203,46 @@ def find_next_comment(file_descriptor: TextIOBase, offset: int) -> bool:
     return False
 
 
-def determine_line_length(fasfa_file: Path) -> int:
+def determine_line_length(fasta_file: Path) -> int:
     """
     Find the standard line length of the nucleotide data in the file.
 
     Args
     ----
-    fasfa_file: The reference genome file, in FASFA format.
+    fasta_file: The reference genome file, in FASTA format.
 
     Returns
     -------
     The length of the first line of the first nucleotide sequence.
     """
-    with fasfa_file.open() as fd:
+    with fasta_file.open() as fd:
         if not find_next_comment(fd, 0):
             raise IOError(
-                "Unable to determine sequence line length of FASFA file."
+                "Unable to determine sequence line length of fasta file."
             )
 
         fd.readline()
         return len(fd.readline()) - 1
 
 
-def extract_fasfa_metadata(fasfa_file: Path) -> dict[str, SequenceInfo]:
+def extract_fasta_metadata(fasta_file: Path) -> dict[str, SequenceInfo]:
     """
     Extract all metadata from FAFSA comment lines.
 
     Args
     ----
-    fasfa_file: The filepath of a valid FAFSA file.
+    fasta_file: The filepath of a valid FAFSA file.
 
     Returns
     -------
-    The FASFA metadata indexed by chromosome.
+    The FASTA metadata indexed by chromosome.
     """
     annotations: dict[str, SequenceInfo] = {}
 
-    line_length: int = determine_line_length(fasfa_file)
+    line_length: int = determine_line_length(fasta_file)
 
     read_position: int = 0
-    with fasfa_file.open() as fd:
+    with fasta_file.open() as fd:
         while find_next_comment(fd, read_position):
             chromosome, sequence_info = extract_line_annotation(fd.readline())
             sequence_info.file_position = fd.tell()
@@ -364,13 +364,13 @@ def _read_sequence(
     file_descriptor: TextIOBase, sequence_length: int, line_length: int
 ) -> str | None:
     """
-    Read a sequence of nucleotides from a FASFA file.
+    Read a sequence of nucleotides from a FASTA file.
 
     Args
     ----
     file_descriptor: The file descriptor, already open for reading ASCII data.
     sequence_length: The length of the sequence to extract.
-    line_length: The length of a line of nucleotide data in the FASFA file.
+    line_length: The length of a line of nucleotide data in the FASTA file.
 
     Returns
     -------
@@ -417,7 +417,7 @@ def find_methylation_sequence(
     genome_metadata: The reference genome file metadata.
     file_descriptor: An open ASCII file descriptor for reference genome.
     sequence_length: The length of sequence to retrieve.
-    line_length: The length of a line of nucleotide data in the FASFA file.
+    line_length: The length of a line of nucleotide data in the FASTA file.
 
     Returns
     -------
@@ -442,7 +442,7 @@ def find_methylation_sequence(
 
 def retrieve_all_cpg_sequences(
     genome_metadata: dict[str, SequenceInfo],
-    fasfa_file: Path,
+    fasta_file: Path,
     methylation_profiles: dict[str, dict[int, MethylationInfo]],
     sequence_length: int,
 ) -> Generator[MethylationSequence, None, None]:
@@ -452,7 +452,7 @@ def retrieve_all_cpg_sequences(
     Args
     ----
     genome_metadata: The reference genome file metadata.
-    fasfa_file: The filepath to the reference genome data.
+    fasta_file: The filepath to the reference genome data.
     methylation_profiles: The methylation profile data.
     sequence_length: The length of sequence to extract.
 
@@ -460,8 +460,8 @@ def retrieve_all_cpg_sequences(
     ------
     Sequence information for each CpG site.
     """
-    line_length: int = determine_line_length(fasfa_file)
-    with fasfa_file.open() as fd:
+    line_length: int = determine_line_length(fasta_file)
+    with fasta_file.open() as fd:
         for chromosome, chromosome_data in methylation_profiles.items():
             for position, methylation_profile in chromosome_data.items():
                 sequence: str = find_methylation_sequence(
@@ -480,7 +480,7 @@ def retrieve_all_cpg_sequences(
 
 
 def load_and_save_all_cpg_sequences(
-    fasfa_file: Path,
+    fasta_file: Path,
     methylation_directory: list[Path],
     sequence_length: int,
     output_directory: Path,
@@ -494,13 +494,13 @@ def load_and_save_all_cpg_sequences(
 
     Args
     ----
-    fasfa_file: The reference genome FASFA file.
+    fasta_file: The reference genome FASTA file.
     methylation_directory: A list of empirical methylation profiles.
     sequence_length: The length of the surrounding sequence to extract.
     output_directory: The directory in which to save the sequences.
     minimum_count: Filter out CpG sites below minimum_count.
     """
-    metadata: dict[str, SequenceInfo] = extract_fasfa_metadata(fasfa_file)
+    metadata: dict[str, SequenceInfo] = extract_fasta_metadata(fasta_file)
     methylation_profiles: dict[str, dict[int, MethylationInfo]] = (
         filter_and_calculate_methylation(
             combine_methylation_results(methylation_directory), minimum_count
@@ -508,7 +508,7 @@ def load_and_save_all_cpg_sequences(
     )
     sequences: Generator[MethylationSequence, None, None] = (
         retrieve_all_cpg_sequences(
-            metadata, fasfa_file, methylation_profiles, sequence_length
+            metadata, fasta_file, methylation_profiles, sequence_length
         )
     )
     output_file: Path = (

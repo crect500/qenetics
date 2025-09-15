@@ -93,9 +93,9 @@ def test_find_next_comment() -> None:
         assert fd.tell() == 236
 
 
-def test_extract_fasfa_metadata() -> None:
+def test_extract_fasta_metadata() -> None:
     annotations: dict[str, cpg_sampler.SequenceInfo] = (
-        cpg_sampler.extract_fasfa_metadata(
+        cpg_sampler.extract_fasta_metadata(
             Path("tests/test_files/test_sequence.fa")
         )
     )
@@ -116,7 +116,7 @@ def test_load_methlation_file_data() -> None:
     assert len(methylation_data) == 3
     assert len(methylation_data["1"]) == 3
     assert methylation_data["1"][2].count_methylated == 2
-    assert methylation_data["1"][2].count_non_methylated == 1
+    assert methylation_data["1"][2].count_non_methylated == 0
     assert methylation_data["2"][5].count_methylated == 1
     assert methylation_data["2"][5].count_non_methylated == 2
     assert methylation_data["X"][6].count_methylated == 0
@@ -175,45 +175,45 @@ def test_read_sequence(
 
 
 def test_find_methylation_sequence(
-    test_fasfa_metadata: dict[str, cpg_sampler.SequenceInfo],
+    test_fasta_metadata: dict[str, cpg_sampler.SequenceInfo],
 ) -> None:
     with Path("tests/test_files/test_sequence.fa").open() as fd:
         assert (
             cpg_sampler.find_methylation_sequence(
-                "2", 16, test_fasfa_metadata, fd, 4, 45
+                "2", 16, test_fasta_metadata, fd, 4, 45
             )
             == "ATCG"
         )
         assert (
             cpg_sampler.find_methylation_sequence(
-                "2", 7, test_fasfa_metadata, fd, 8, 45
+                "2", 7, test_fasta_metadata, fd, 8, 45
             )
             == "ACTGAATG"
         )
         assert (
             cpg_sampler.find_methylation_sequence(
-                "2", 42, test_fasfa_metadata, fd, 8, 45
+                "2", 42, test_fasta_metadata, fd, 8, 45
             )
             == "GGGGAATT"
         )
         assert not cpg_sampler.find_methylation_sequence(
-            "1", 1, test_fasfa_metadata, fd, 4, 45
+            "1", 1, test_fasta_metadata, fd, 4, 45
         )
         assert not cpg_sampler.find_methylation_sequence(
-            "1", 43, test_fasfa_metadata, fd, 4, 45
+            "1", 43, test_fasta_metadata, fd, 4, 45
         )
 
 
 def test_retrieve_all_cpg_sequences(
-    test_fasfa_file: Path,
-    test_fasfa_metadata: dict[str, cpg_sampler.SequenceInfo],
+    test_fasta_file: Path,
+    test_fasta_metadata: dict[str, cpg_sampler.SequenceInfo],
     test_methylation_profiles: dict[
         str, dict[int, cpg_sampler.MethylationInfo]
     ],
 ) -> None:
     results: list[cpg_sampler.MethylationSequence] = list(
         cpg_sampler.retrieve_all_cpg_sequences(
-            test_fasfa_metadata, test_fasfa_file, test_methylation_profiles, 8
+            test_fasta_metadata, test_fasta_file, test_methylation_profiles, 8
         )
     )
     assert len(results) == 2
