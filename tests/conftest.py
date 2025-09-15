@@ -9,10 +9,10 @@ from qenetics.tools import cpg_sampler
 def test_fasfa_metadata() -> dict[str, cpg_sampler.SequenceInfo]:
     return {
         "1": cpg_sampler.SequenceInfo(
-            length=44, is_chromosome=True, file_position=47
+            length=44, is_chromosome=True, file_position=50
         ),
         "2": cpg_sampler.SequenceInfo(
-            length=88, is_chromosome=True, file_position=139
+            length=88, is_chromosome=True, file_position=145
         ),
     }
 

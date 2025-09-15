@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from csv import DictReader
 from dataclasses import dataclass
-from io import TextIOBase
+from io import StringIO, TextIOBase
 import logging
 from pathlib import Path
 from typing import Generator
@@ -13,6 +13,13 @@ from numpy.typing import NDArray
 from qenetics.qcpg.qcpg import string_to_nucleotides, Nucleodtide
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class TenGenomicsSequenceInfo:
+    name: str
+    is_chromosome: bool
+    length: int
 
 
 @dataclass
@@ -65,6 +72,92 @@ class MethylationSequence:
 
     sequence: str
     methylation_profile: MethylationInfo
+
+
+def _write_sequence(
+    sequence: str, name: str, is_chromosome: bool, output_filepath: Path
+) -> None:
+    """
+    Append the annotation and sequence to a file.
+
+    Args
+    ----
+    sequence: The sequence of nucleotides.
+    name: The name of the sequence to be written
+    is_chromosome: Designates whether the sequence belongs to a nucleotide or not.
+    output_filepath:  The filepath to write the data to.
+    """
+    with open(output_filepath, "a") as fd:
+        fd.write(">")
+        fd.write(name)
+        fd.write(" ")
+        if is_chromosome:
+            fd.write("dna:chromosome chromosome:GRCm38:")
+        else:
+            fd.write("dna_sm:scaffold scaffold:GRCm38:")
+        fd.write(name)
+        fd.write(":1:")
+        fd.write(str(len(sequence) - sequence.count("\n")))
+        fd.write(":1 REF\n")
+        fd.write(sequence)
+
+
+def _read_tengenomics_annotation(line: str) -> tuple[str, bool]:
+    """
+    Retrieve the name of the sequence and whether it is a chromosome or not.
+
+    Args
+    ----
+    line: The read line.
+
+    Returns
+    -------
+    The name and whether the sequence belongs to a chromosome.
+    """
+    annotation: list[str] = line.split()
+    return annotation[1], "chr" in annotation[0]
+
+
+def write_ensembl_from_tengenomics(
+    tengenomics_filepath: Path, output_filepath: Path
+) -> None:
+    """
+    Write the contents of a 10xGenomics FASTA file into an ensembl-formatted file.
+
+    Args
+    ----
+    tengenomics_filepath: The existing 10xGenomics filepath.
+    output_filepath: The intended filepath of the Ensembl-formatted file.
+    """
+    block_read_size: int = 2**20  # 1MB read size
+    sequence: str = ""
+    with open(tengenomics_filepath) as fd:
+        buffer = StringIO(fd.read(block_read_size))
+        line: str = buffer.readline()
+        while len(line) > 0:
+            if line[0] == ">":
+                if line[-1] != "\n":
+                    buffer = StringIO(fd.read(block_read_size))
+                    line += buffer.readline()
+                if len(sequence) > 0:
+                    _write_sequence(
+                        sequence, name, is_chromosome, output_filepath
+                    )
+                name, is_chromosome = _read_tengenomics_annotation(line)
+                sequence = ""
+            else:
+                sequence += line
+                if line[-1] != "\n":
+                    buffer = StringIO(fd.read(block_read_size))
+                    sequence += buffer.readline()
+
+            line = buffer.readline()
+            if len(line) == 0:
+                buffer = StringIO(fd.read(block_read_size))
+                line = buffer.readline()
+
+        if len(sequence) > 0:
+            _write_sequence(sequence, name, is_chromosome, output_filepath)
 
 
 def extract_line_annotation(line: str) -> tuple[str, SequenceInfo]:

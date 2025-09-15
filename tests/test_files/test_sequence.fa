@@ -1,7 +1,7 @@
->1 dna:chromosome chromosome:abc:1:1:44:1 REF
+>1 dna:chromosome chromosome:GRCm38:1:1:44:1 REF
 ACTGACTGACTGACTGACTGACTGACTGACTGACTGACTGACT
->2 dna:chromosome chromosome:abc:2:1:88:1 REF
+>2 dna:chromosome chromosome:GRCm38:2:1:88:1 REF
 NNNACTGAAAATGGATCCCGAAATCCCCCCAATATCCCGGGGT
 AAATTTNNNNNNNNCCTGACCGTACAATTTGACCTGATTCTTT
->A dna:nomosome nomosome:abc:A:1:5:1 REF
+>abcd.1 dna_sm:scaffold scaffold:GRCm38:abcd.1:1:5:1 REF
 ABCDE
