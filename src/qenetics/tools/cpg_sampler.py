@@ -594,3 +594,55 @@ def sequence_to_numpy(sequence: list[Nucleodtide]) -> NDArray[int]:
     return np.array(
         [nucleotide_to_numpy(nucleotide) for nucleotide in sequence]
     )
+
+
+def nucleotide_character_to_int(nucleotide: str) -> NDArray[int]:
+    if nucleotide == "A":
+        return np.array([1, 0, 0, 0], dtype=int)
+    if nucleotide == "T":
+        return np.array([0, 1, 0, 0], dtype=int)
+    if nucleotide == "C":
+        return np.array([0, 0, 1, 0], dtype=int)
+    if nucleotide == "G":
+        return np.array([0, 0, 0, 1], dtype=int)
+
+    raise ValueError(f"{nucleotide} is not a valid nucleotide designator")
+
+
+def nucleotide_string_to_numpy(sequence: str) -> NDArray[int] | None:
+    if "N" in sequence:
+        return None
+    else:
+        return np.array(
+            [
+                nucleotide_character_to_int(nucleotide)
+                for nucleotide in sequence
+            ],
+            dtype=int,
+        )
+
+
+def samples_to_numpy(
+    methylation_filepath: Path, threshold: float = 0.5, negative_state: int = 0
+) -> tuple[NDArray[int], NDArray[int]]:
+    logger.debug(
+        f"Loading methylation data from {methylation_filepath} with threshold "
+        f"{threshold}."
+    )
+    with open(methylation_filepath) as fd:
+        csv_reader = DictReader(fd)
+        read_data: list[tuple[NDArray[int], NDArray[int]]] = [
+            (
+                nucleotide_string_to_numpy(line["sequence"]),
+                np.array(
+                    0 if float(line["ratio_methylated"]) < threshold else 1,
+                    dtype=int,
+                ),
+            )
+            for line in csv_reader
+        ]
+        return np.array(
+            [row[0] for row in read_data if row[0] is not None], dtype=int
+        ), np.array(
+            [row[1] for row in read_data if row[0] is not None], dtype=int
+        )

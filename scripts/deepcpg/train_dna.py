@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 from qenetics.deepcpg import train
-from qenetics.deepcpg import deepcpg_utils
+from qenetics.tools import cpg_sampler
 
 
 @dataclass
@@ -37,10 +37,10 @@ def _parse_config(config_filepath: Path) -> RunConfig:
 
 
 def train_deepcpg(config: RunConfig) -> None:
-    training_sequences, training_methylation = deepcpg_utils.load_samples(
+    training_sequences, training_methylation = cpg_sampler.samples_to_numpy(
         config.training_filepath
     )
-    validation_sequences, validation_methylation = deepcpg_utils.load_samples(
+    validation_sequences, validation_methylation = cpg_sampler.samples_to_numpy(
         config.validation_filepath
     )
     train.train_model(

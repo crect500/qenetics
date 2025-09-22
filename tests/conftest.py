@@ -64,3 +64,8 @@ def test_sequences() -> list[str]:
         "AAAATTTTCCCCGGGG",
         "GGGGCCCCTTTTAAAA",
     ]
+
+
+@pytest.fixture
+def test_input_file() -> Path:
+    return Path("tests/test_files/test_input_data.csv")

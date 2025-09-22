@@ -5,8 +5,6 @@ from collections.abc import Generator
 from dataclasses import dataclass
 import logging
 
-import numpy as np
-from numpy.typing import NDArray
 from pathlib import Path
 
 from qenetics.tools import cpg_sampler
@@ -171,15 +169,3 @@ def create_sequence_dataset(
                     _write_sequence_row(
                         output_fd, sequence, methylation_profile
                     )
-
-
-def load_samples(
-    data_filepath: Path, threshold: float = 0.5
-) -> tuple[NDArray[int], NDArray[int]]:
-    sequences, methylation = cpg_sampler.load_methylation_samples(
-        data_filepath, threshold=threshold
-    )
-    input_data = np.array(
-        [cpg_sampler.sequence_to_numpy(sequence) for sequence in sequences]
-    )
-    return input_data, np.array(methylation)

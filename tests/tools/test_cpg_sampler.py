@@ -1,3 +1,5 @@
+import numpy as np
+from numpy.typing import NDArray
 from pathlib import Path
 import pytest
 from tempfile import TemporaryDirectory
@@ -108,7 +110,7 @@ def test_extract_fasta_metadata() -> None:
     assert annotations["2"].file_position == 145
 
 
-def test_load_methlation_file_data() -> None:
+def test_load_methylation_file_data() -> None:
     methylation_data: dict[str, dict[int, cpg_sampler.MethylationInfo]] = dict()
     cpg_sampler._load_methlation_file_data(
         Path("tests/test_files/test_methylation_profile.tsv"), methylation_data
@@ -225,3 +227,73 @@ def test_retrieve_all_cpg_sequences(
     assert results[1].sequence == "NNACAAAA"
     assert results[1].methylation_profile.count_methylated == 1
     assert results[1].methylation_profile.count_non_methylated == 2
+
+
+@pytest.mark.parametrize(
+    ("nucleotide", "expected_int"),
+    [("A", 0), ("T", 1), ("C", 2), ("G", 3), ("N", -1)],
+)
+def test_nucleotide_character_to_int(
+    nucleotide: str, expected_int: int
+) -> None:
+    if expected_int >= 0:
+        expected_array: NDArray[int] = np.array([0] * 4, dtype=int)
+        expected_array[expected_int] = 1
+        assert (
+            cpg_sampler.nucleotide_character_to_int(nucleotide)
+            == expected_array
+        ).all()
+    else:
+        with pytest.raises(
+            ValueError,
+            match=f"{nucleotide} is not a valid nucleotide designator",
+        ):
+            _ = cpg_sampler.nucleotide_character_to_int(nucleotide)
+
+
+@pytest.mark.parametrize(
+    ("sequence", "expected_array"),
+    [
+        ("A", [0]),
+        ("AT", [0, 1]),
+        ("ATC", [0, 1, 2]),
+        ("ATCG", [0, 1, 2, 3]),
+        ("NATCGN", []),
+    ],
+)
+def test_nucleotide_string_to_numpy(
+    sequence: str, expected_array: list[int]
+) -> None:
+    one_hot_matrix: NDArray[int] = cpg_sampler.nucleotide_string_to_numpy(
+        sequence
+    )
+    if len(expected_array) == 0:
+        assert one_hot_matrix is None
+    else:
+        working_matrix: list[list[int]] = []
+        for nucleotide in expected_array:
+            working_array: list[int] = [0] * 4
+            working_array[nucleotide] = 1
+            working_matrix.append(working_array)
+        assert (one_hot_matrix == np.array(working_matrix, dtype=int)).all()
+
+
+@pytest.mark.parametrize(
+    ("threshold", "quantity_methylated"), [(0.0, 3), (0.5, 2), (1.0, 1)]
+)
+def test_samples_to_numpy(
+    threshold: float, quantity_methylated: int, test_input_file: Path
+) -> None:
+    valid_samples: int = 3
+    sequence_length: int = 12
+    unique_nucleotides_quantity: int = 4
+    samples, methylations = cpg_sampler.samples_to_numpy(
+        test_input_file, threshold
+    )
+    print(samples)
+    assert np.sum(methylations) == quantity_methylated
+    assert samples.shape == (
+        valid_samples,
+        sequence_length,
+        unique_nucleotides_quantity,
+    )

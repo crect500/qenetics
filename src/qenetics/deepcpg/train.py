@@ -5,15 +5,10 @@ from pathlib import Path
 from keras import optimizers
 from keras.losses import BinaryCrossentropy
 from keras.models import Model
-import numpy as np
 from numpy.typing import NDArray
 
 from qenetics.deepcpg import models
 from qenetics.deepcpg.metrics import CLA_METRICS
-from qenetics.tools.cpg_sampler import (
-    load_methylation_samples,
-    sequence_to_numpy,
-)
 
 logger = logging.getLogger(__name__)
 
