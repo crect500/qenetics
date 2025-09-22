@@ -1,10 +1,4 @@
-from collections import OrderedDict
-import re
-
 from keras import backend, Layer, layers, models, regularizers
-
-from qenetics.deepcpg.train import TrainingConfig
-
 
 class Model(object):
     """Abstract model call.
@@ -196,39 +190,3 @@ def _get_first_conv_layer(
         return convulational_layer, activation_layer
     else:
         return convulational_layer
-
-
-def set_trainability(model: Model, config: TrainingConfig) -> None:
-    trainable = []
-    not_trainable = []
-    if config.fine_tune:
-        not_trainable.append(".*")
-    elif config.models_to_train:
-        not_trainable.append(".*")
-        for name in config.models_to_train:
-            trainable.append(f"{name}/")
-    if config.freeze_filter:
-        not_trainable.append(_get_first_conv_layer(model.layers).name)
-    if len(trainable) == 0 and len(config.trainable) > 0:
-        trainable = config.trainable
-    if len(not_trainable) == 0 and len(config.not_trainable) > 0:
-        not_trainable = config.not_trainable
-
-    if len(trainable) == 0 and len(not_trainable) == 0:
-        return
-
-    table = OrderedDict()
-    table["layer"] = []
-    table["trainable"] = []
-    for layer in model.layers:
-        if layer not in model.input_layers + model.output_layers:
-            if not hasattr(layer, "trainable"):
-                continue
-            for regex in not_trainable:
-                if re.match(regex, layer.name):
-                    layer.trainable = False
-            for regex in trainable:
-                if re.match(regex, layer.name):
-                    layer.trainable = True
-            table["layer"].append(layer.name)
-            table["trainable"].append(layer.trainable)
