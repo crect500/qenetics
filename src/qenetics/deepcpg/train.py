@@ -36,8 +36,8 @@ def _build_model(
     else:
         logger.info("Building DNA model ...")
         dna_model_builder = models.CnnL2h128(
-            l1_decay=config.layer_decays[0],
-            l2_decay=config.layer_decays[1],
+            layer1_decay=config.layer_decays[0],
+            layer2_decay=config.layer_decays[1],
             dropout=config.dropout_rate,
         )
         sequence_length = _get_sequence_length(input_data)

@@ -384,7 +384,7 @@ def _read_sequence(
             + sequence[half_length + 2 : included_cg_length]
         )
 
-    newline_quantity = int((sequence_length - len(sequence)) / line_length)
+    newline_quantity = int((included_cg_length - len(sequence)) / line_length)
     sequence += file_descriptor.read(
         included_cg_length - len(sequence) + newline_quantity
     ).replace("\n", "")
@@ -424,11 +424,13 @@ def find_methylation_sequence(
     if not genome_metadata.get(chromosome):
         return None
 
+    cg_length: int = 2
     chromosome_metadata: SequenceInfo = genome_metadata[chromosome]
     half_sequence_length = int(sequence_length / 2)
     if (
         position - half_sequence_length < 0
-        or position + half_sequence_length + 2 >= chromosome_metadata.length
+        or position + half_sequence_length + cg_length
+        >= chromosome_metadata.length
     ):
         return None
 

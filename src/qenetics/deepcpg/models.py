@@ -1,5 +1,6 @@
 from keras import backend, Layer, layers, models, regularizers
 
+
 class Model(object):
     """Abstract model call.
 
@@ -84,27 +85,36 @@ class CnnL2h128(DnaModel):
     def __call__(self, inputs):
         x = inputs[0]
 
-        w_reg = regularizers.WeightRegularizer(
-            l1=self.layer1_decay, l2=self.layer2_decay
-        )
-        x = layers.Conv1D(128, 11, init=self.init_name, W_regularizer=w_reg)(x)
+        x = layers.Conv1D(
+            128,
+            11,
+            init=self.init_name,
+            kernel_regularizer=regularizers.L1L2(
+                l1=self.layer1_decay, l2=self.layer2_decay
+            ),
+        )(x)
         x = layers.Activation("relu")(x)
         x = layers.MaxPooling1D(4)(x)
 
-        w_reg = regularizers.WeightRegularizer(
-            l1=self.layer1_decay, l2=self.layer2_decay
-        )
-        x = layers.Conv1D(256, 3, init=self.init_name, W_regularizer=w_reg)(x)
+        x = layers.Conv1D(
+            256,
+            3,
+            init=self.init_name,
+            kernel_regularizer=regularizers.L1L2(
+                l1=self.layer1_decay, l2=self.layer2_decay
+            ),
+        )(x)
         x = layers.Activation("relu")(x)
         x = layers.MaxPooling1D(2)(x)
 
         x = layers.Flatten()(x)
 
-        w_reg = regularizers.WeightRegularizer(
-            l1=self.layer1_decay, l2=self.layer2_decay
-        )
         x = layers.Dense(
-            self.nb_hidden, init=self.init_name, W_regularizer=w_reg
+            self.nb_hidden,
+            init=self.init_name,
+            kernel_regularizer=regularizers.L1L2(
+                l1=self.layer1_decay, l2=self.layer2_decay
+            ),
         )(x)
         x = layers.Activation("relu")(x)
         x = layers.Dropout(self.dropout)(x)

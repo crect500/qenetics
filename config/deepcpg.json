@@ -1,6 +1,6 @@
 {
   "layer_decays": [0.95, 0.95],
   "training_filepath": "path",
-  "test_filepath": "path",
-  "output_filepath": "path",
+  "validation_filepath": "path",
+  "output_filepath": "path"
 }
