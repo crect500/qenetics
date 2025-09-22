@@ -248,9 +248,7 @@ def extract_fasta_metadata(fasta_file: Path) -> dict[str, SequenceInfo]:
             sequence_info.file_position = fd.tell()
             if sequence_info.is_chromosome:
                 annotations[chromosome] = sequence_info
-            newline_quantity = int(sequence_info.length / line_length)
-            if newline_quantity == 0:
-                newline_quantity = 1
+            newline_quantity = int(sequence_info.length / line_length) + 1
             read_position = (
                 sequence_info.file_position
                 + sequence_info.length

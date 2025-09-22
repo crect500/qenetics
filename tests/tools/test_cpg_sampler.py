@@ -101,10 +101,10 @@ def test_extract_fasta_metadata() -> None:
     )
     assert len(annotations) == 2
 
-    assert annotations["1"].length == 44
+    assert annotations["1"].length == 43
     assert annotations["1"].file_position == 50
 
-    assert annotations["2"].length == 88
+    assert annotations["2"].length == 86
     assert annotations["2"].file_position == 145
 
 
