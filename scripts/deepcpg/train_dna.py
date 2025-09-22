@@ -11,7 +11,6 @@ from qenetics.tools import cpg_sampler
 class RunConfig:
     training_filepath: Path
     validation_filepath: Path
-    layer_decays: list[float]
     output_filepath: Path
 
 
@@ -24,36 +23,44 @@ def _parse_script_args() -> Namespace:
     return parser.parse_args()
 
 
-def _parse_config(config_filepath: Path) -> RunConfig:
+def _parse_config(
+    config_filepath: Path,
+) -> tuple[RunConfig, train.TrainingConfig]:
     with open(config_filepath) as fd:
-        config: dict[str, str | list[float]] = json.load(fd)
+        config: dict[str, str | float | int | list[float]] = json.load(fd)
 
     return RunConfig(
         training_filepath=Path(config["training_filepath"]),
         validation_filepath=Path(config["validation_filepath"]),
-        layer_decays=config["layer_decays"],
         output_filepath=Path(config["output_filepath"]),
+    ), train.TrainingConfig(
+        layer_decays=config["layer_decays"],
+        learning_rate=config["learning_rate"],
+        epochs=config["epochs"],
+        batch_size=config["batch_size"],
     )
 
 
-def train_deepcpg(config: RunConfig) -> None:
+def train_deepcpg(
+    run_config: RunConfig, training_config: train.TrainingConfig
+) -> None:
     training_sequences, training_methylation = cpg_sampler.samples_to_numpy(
-        config.training_filepath
+        run_config.training_filepath
     )
     validation_sequences, validation_methylation = cpg_sampler.samples_to_numpy(
-        config.validation_filepath
+        run_config.validation_filepath
     )
     train.train_model(
         training_sequences=training_sequences,
         training_methylations=training_methylation,
         validation_sequences=validation_sequences,
         validation_methylation=validation_methylation,
-        layer_decays=config.layer_decays,
-        output_filepath=config.output_filepath,
+        config=training_config,
+        output_filepath=run_config.output_filepath,
     )
 
 
 if __name__ == "__main__":
     args: Namespace = _parse_script_args()
-    config: RunConfig = _parse_config(args.config_filepath)
-    train_deepcpg(config)
+    run_config, training_config = _parse_config(args.config_filepath)
+    train_deepcpg(run_config, training_config)

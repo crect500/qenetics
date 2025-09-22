@@ -1,5 +1,8 @@
 {
   "layer_decays": [0.95, 0.95],
+  "learning_rate": 0.001,
+  "epochs": 100,
+  "batch_size": 128,
   "training_filepath": "path",
   "validation_filepath": "path",
   "output_filepath": "path"

@@ -18,6 +18,7 @@ class TrainingConfig:
     dropout_rate: float = 0.0
     batch_size: int = 128
     learning_rate: float = 0.0001
+    epochs: int = 100
     fine_tune: bool = False
 
 
@@ -51,11 +52,10 @@ def train_model(
     training_methylations: NDArray[int],
     validation_sequences: NDArray[int],
     validation_methylation: NDArray[int],
-    layer_decays: list[float],
+    config: TrainingConfig,
     output_filepath: Path,
     model_filepath: Path | None = None,
 ) -> None:
-    config = TrainingConfig(layer_decays)
     model: Model = _build_model(training_sequences, config, model_filepath)
     optimizer = optimizers.Adam(learning_rate=config.learning_rate)
     model.compile(
@@ -66,7 +66,6 @@ def train_model(
             metrics.BinaryAccuracy(),
             metrics.Precision(),
             metrics.Recall(),
-            metrics.F1Score(),
         ],
     )
     model.fit(
@@ -74,5 +73,6 @@ def train_model(
         training_methylations,
         batch_size=config.batch_size,
         validation_data=(validation_sequences, validation_methylation),
+        epochs=config.epochs,
     )
     model.save(output_filepath)
