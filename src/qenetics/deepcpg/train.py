@@ -2,13 +2,12 @@ from dataclasses import dataclass
 import logging
 from pathlib import Path
 
-from keras import optimizers
+from keras import optimizers, metrics
 from keras.losses import BinaryCrossentropy
 from keras.models import Model
 from numpy.typing import NDArray
 
 from qenetics.deepcpg import models
-from qenetics.deepcpg.metrics import CLA_METRICS
 
 logger = logging.getLogger(__name__)
 
@@ -44,9 +43,7 @@ def _build_model(
         dna_inputs = dna_model_builder.inputs(sequence_length)
         dna_model = dna_model_builder(dna_inputs)
 
-    output = models.add_output_layers(dna_model.outputs)
-    model = Model(input=dna_model.inputs, output=output, name=dna_model.name)
-    return model
+    return dna_model
 
 
 def train_model(
@@ -62,7 +59,15 @@ def train_model(
     model: Model = _build_model(training_sequences, config, model_filepath)
     optimizer = optimizers.Adam(learning_rate=config.learning_rate)
     model.compile(
-        optimizer=optimizer, loss=BinaryCrossentropy(), metrics=CLA_METRICS
+        optimizer=optimizer,
+        loss=BinaryCrossentropy(),
+        metrics=[
+            metrics.AUC(),
+            metrics.BinaryAccuracy(),
+            metrics.Precision(),
+            metrics.Recall(),
+            metrics.F1Score(),
+        ],
     )
     model.fit(
         training_sequences,

@@ -44,10 +44,7 @@ class Model(object):
     def _build(self, input, output):
         """Build final model at the end of `__call__`."""
         model = models.Model(input, output, name=self.model_name)
-        if self.scope:
-            for layer in model.layers:
-                if layer not in model.input_layers:
-                    layer.name = f"{self.scope}/{layer.name}"
+
         return model
 
     def __call__(self, inputs=None):
@@ -88,7 +85,7 @@ class CnnL2h128(DnaModel):
         x = layers.Conv1D(
             128,
             11,
-            init=self.init_name,
+            kernel_initializer=self.init_name,
             kernel_regularizer=regularizers.L1L2(
                 l1=self.layer1_decay, l2=self.layer2_decay
             ),
@@ -99,7 +96,7 @@ class CnnL2h128(DnaModel):
         x = layers.Conv1D(
             256,
             3,
-            init=self.init_name,
+            kernel_initializer=self.init_name,
             kernel_regularizer=regularizers.L1L2(
                 l1=self.layer1_decay, l2=self.layer2_decay
             ),
@@ -111,13 +108,20 @@ class CnnL2h128(DnaModel):
 
         x = layers.Dense(
             self.nb_hidden,
-            init=self.init_name,
+            kernel_initializer=self.init_name,
             kernel_regularizer=regularizers.L1L2(
                 l1=self.layer1_decay, l2=self.layer2_decay
             ),
         )(x)
         x = layers.Activation("relu")(x)
         x = layers.Dropout(self.dropout)(x)
+
+        x = layers.Dense(
+            1,
+            kernel_initializer="glorot_uniform",
+            activation="sigmoid",
+            name="output",
+        )(x)
 
         return self._build(inputs, x)
 
@@ -156,15 +160,12 @@ def add_output_layers(model: Model) -> Layer:
     Args
     ----
     model: Keras model to which output layers are added.
-    output_names: List of output names correlating to desired output metrics.
 
     Returns
     -------
     Output layers added to `model`.
     """
-    return layers.Dense(
-        1, init="glorot_uniform", activation="sigmoid", name="output"
-    )(model)
+    return
 
 
 def _get_first_conv_layer(
