@@ -1,7 +1,10 @@
 from argparse import ArgumentParser, Namespace
 from pathlib import Path
 
-from qenetics.deepcpg.deepcpg_utils import create_sequence_dataset, create_dataset_from_directory
+from qenetics.deepcpg.deepcpg_utils import (
+    create_sequence_dataset,
+    create_dataset_from_directory,
+)
 
 
 def _parse_script_args() -> Namespace:
@@ -79,7 +82,7 @@ def create_samples(
             fasta_filepath=fasta_filepath,
             sequence_length=sequence_length,
             output_directory=output_filepath,
-            minimum_samples=minimum_samples
+            minimum_samples=minimum_samples,
         )
     elif methylation_filepath.is_file() and output_filepath.is_file():
         create_sequence_dataset(
@@ -91,9 +94,11 @@ def create_samples(
             output_file=output_filepath,
         )
     else:
-        raise RuntimeError(f"The methylation file {methylation_filepath} and output "
-                           f"filepath {output_filepath} must be of the same type "
-                           "(file or directory)")
+        raise RuntimeError(
+            f"The methylation file {methylation_filepath} and output "
+            f"filepath {output_filepath} must be of the same type "
+            "(file or directory)"
+        )
 
 
 if __name__ == "__main__":

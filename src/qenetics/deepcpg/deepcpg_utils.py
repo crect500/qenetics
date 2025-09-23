@@ -178,12 +178,12 @@ def create_dataset_from_directory(
     output_directory: Path,
     minimum_samples: int,
 ) -> None:
-    identifier_length: int = 10
+    identifier_length: int = 11
     training_chromosomes: list[str] = ["1", "3", "5", "7", "9", "11"]
     validation_chromosomes: list[str] = ["2", "4", "6", "8", "10", "12"]
     for methylation_file in directory.iterdir():
         output_file_common_name: str = methylation_file.name.split(".")[0][
-            identifier_length - 1 :
+            identifier_length:
         ]
         create_sequence_dataset(
             methylation_filepath=methylation_file,
