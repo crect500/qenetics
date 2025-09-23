@@ -57,7 +57,7 @@ def train_model(
     model_filepath: Path | None = None,
 ) -> None:
     model: Model = _build_model(training_sequences, config, model_filepath)
-    optimizer = optimizers.Adam(learning_rate=config.learning_rate)
+    optimizer = optimizers.Adam(learning_rate=config.learning_rate, decay=0.95)
     model.compile(
         optimizer=optimizer,
         loss=BinaryCrossentropy(),
@@ -66,6 +66,7 @@ def train_model(
             metrics.BinaryAccuracy(),
             metrics.Precision(),
             metrics.Recall(),
+            metrics.TruePositives(),
         ],
     )
     model.fit(

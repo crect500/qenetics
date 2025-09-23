@@ -112,6 +112,7 @@ class CnnL2h128(DnaModel):
             kernel_regularizer=regularizers.L1L2(
                 l1=self.layer1_decay, l2=self.layer2_decay
             ),
+            trainable=False,
         )(x)
         x = layers.Activation("relu")(x)
         x = layers.Dropout(self.dropout)(x)
@@ -121,6 +122,7 @@ class CnnL2h128(DnaModel):
             kernel_initializer="glorot_uniform",
             activation="sigmoid",
             name="output",
+            trainable=False,
         )(x)
 
         return self._build(inputs, x)

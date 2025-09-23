@@ -169,3 +169,36 @@ def create_sequence_dataset(
                     _write_sequence_row(
                         output_fd, sequence, methylation_profile
                     )
+
+
+def create_dataset_from_directory(
+    directory: Path,
+    fasta_filepath: Path,
+    sequence_length: int,
+    output_directory: Path,
+    minimum_samples: int,
+) -> None:
+    identifier_length: int = 10
+    training_chromosomes: list[str] = ["1", "3", "5", "7", "9", "11"]
+    validation_chromosomes: list[str] = ["2", "4", "6", "8", "10", "12"]
+    for methylation_file in directory.iterdir():
+        output_file_common_name: str = methylation_file.name.split(".")[0][
+            identifier_length - 1 :
+        ]
+        create_sequence_dataset(
+            methylation_filepath=methylation_file,
+            fasta_file=fasta_filepath,
+            sequence_length=sequence_length,
+            chromosomes=training_chromosomes,
+            output_file=output_directory
+            / f"training_{output_file_common_name}.csv",
+            minimum_samples=minimum_samples,
+        )
+        create_sequence_dataset(
+            methylation_filepath=methylation_file,
+            fasta_file=fasta_filepath,
+            sequence_length=sequence_length,
+            chromosomes=validation_chromosomes,
+            output_file=output_directory
+            / f"validation_{output_file_common_name}.csv",
+        )
