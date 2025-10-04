@@ -1,8 +1,10 @@
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from unittest import mock
+
 import numpy as np
 from numpy.typing import NDArray
-from pathlib import Path
 import pytest
-from tempfile import TemporaryDirectory
 
 from qenetics.tools import cpg_sampler
 
@@ -110,43 +112,214 @@ def test_extract_fasta_metadata() -> None:
     assert annotations["2"].file_position == 145
 
 
-def test_load_methylation_file_data() -> None:
-    methylation_data: dict[str, dict[int, cpg_sampler.MethylationInfo]] = dict()
-    cpg_sampler._load_methlation_file_data(
-        Path("tests/test_files/test_methylation_profile.tsv"), methylation_data
-    )
-    assert len(methylation_data) == 3
-    assert len(methylation_data["1"]) == 3
-    assert methylation_data["1"][2].count_methylated == 2
-    assert methylation_data["1"][2].count_non_methylated == 0
-    assert methylation_data["2"][5].count_methylated == 1
-    assert methylation_data["2"][5].count_non_methylated == 2
-    assert methylation_data["X"][6].count_methylated == 0
-    assert methylation_data["X"][6].count_non_methylated == 1
-
-
-def test_filter_and_calculate_methylation(
-    test_methylation_profiles: dict[
-        str, dict[int, cpg_sampler.MethylationInfo]
+@pytest.mark.parametrize(
+    ("line", "chromosome", "position", "ratio", "count"),
+    [
+        ("1\t2\t2\t100\t5\t0", "1", 2, 1.0, 5),
+        ("X\t3\t3\t33.33333\t1\t2", "X", 3, 0.3333333, 3),
     ],
+)
+def test_process_cov_methylation_line(
+    line: str, chromosome: str, position: int, ratio: float, count: int
 ) -> None:
-    filtered_profiles: dict[str, dict[int, cpg_sampler.MethylationInfo]] = (
-        cpg_sampler.filter_and_calculate_methylation(test_methylation_profiles)
+    minimum_count: int = 4
+    methylation_profile: cpg_sampler.MethylationInfo | None = (
+        cpg_sampler._process_cov_methylation_line(line, minimum_count)
     )
-    assert len(filtered_profiles) == 3
-    assert len(filtered_profiles["1"]) == 3
-    assert len(filtered_profiles["2"]) == 1
-    assert len(filtered_profiles["X"]) == 1
-    assert filtered_profiles["1"][2].ratio_methylated == pytest.approx(
-        0.67, abs=0.01
+    if count >= minimum_count:
+        assert methylation_profile.chromosome == chromosome
+        assert methylation_profile.position == position
+        assert methylation_profile.methylation_ratio == pytest.approx(ratio)
+        assert methylation_profile.experiment_count == count
+    else:
+        assert methylation_profile is None
+
+
+@pytest.mark.parametrize(
+    ("line", "chromosome", "position", "ratio", "count"),
+    [
+        ("chr1\t2\tC\t-\t5\t5\t0\t1.0\tCGC\tCpG", "1", 2, 1.0, 5),
+        ("chrX\t3\tg\t+\t3\t1\t0\t0.33333\tCGC\tCpG", "X", 3, 0.3333333, 3),
+    ],
+)
+def test_process_cpg_methylation_line(
+    line: str, chromosome: str, position: int, ratio: float, count: int
+) -> None:
+    minimum_count: int = 4
+    methylation_profile: cpg_sampler.MethylationInfo | None = (
+        cpg_sampler._process_cpg_methylation_line(line, minimum_count)
+    )
+    if count >= minimum_count:
+        assert methylation_profile.chromosome == chromosome
+        assert methylation_profile.position == position
+        assert methylation_profile.methylation_ratio == pytest.approx(ratio)
+        assert methylation_profile.experiment_count == count
+    else:
+        assert methylation_profile is None
+
+
+@pytest.mark.parametrize(
+    ("line", "chromosome", "position", "ratio", "count"),
+    [
+        ("chr1\t2\t1.0\t5\t5\t0", "1", 2, 1.0, 5),
+        ("chrX\t3\t0.33333\t3\t1\t2", "X", 3, 0.3333333, 3),
+    ],
+)
+def test_process_deepcpg_methylation_line(
+    line: str, chromosome: str, position: int, ratio: float, count: int
+) -> None:
+    minimum_count: int = 4
+    methylation_profile: cpg_sampler.MethylationInfo | None = (
+        cpg_sampler._process_deepcpg_methylation_line(line, minimum_count)
+    )
+    if count >= minimum_count:
+        assert methylation_profile.chromosome == chromosome
+        assert methylation_profile.position == position
+        assert methylation_profile.methylation_ratio == pytest.approx(
+            ratio, rel=1e-4
+        )
+        assert methylation_profile.experiment_count == count
+
+
+def test_process_methylation_line() -> None:
+    with (
+        mock.patch(
+            "qenetics.tools.cpg_sampler._process_cov_methylation_line"
+        ) as mock_cov,
+        mock.patch(
+            "qenetics.tools.cpg_sampler._process_cpg_methylation_line"
+        ) as mock_cpg,
+    ):
+        _ = cpg_sampler._process_methylation_line(
+            "", cpg_sampler.MethylationFormat.COV
+        )
+        mock_cov.assert_called_once()
+        mock_cpg.assert_not_called()
+
+        _ = cpg_sampler._process_methylation_line(
+            "", cpg_sampler.MethylationFormat.CPG
+        )
+        mock_cov.assert_called_once()
+        mock_cpg.assert_called_once()
+
+
+def test_retrieve_methylation_data(test_methylation_file: Path) -> None:
+    methylation_profiles: list[cpg_sampler.MethylationInfo] = list(
+        cpg_sampler.retrieve_methylation_data(test_methylation_file)
+    )
+    assert len(methylation_profiles) == 5
+
+    with (
+        TemporaryDirectory() as temp_dir,
+        mock.patch(
+            "qenetics.tools.cpg_sampler._process_cpg_methylation_line"
+        ) as mock_cpg,
+    ):
+        test_file = Path(temp_dir) / "test_file.cpg.txt"
+        test_file.write_text("line")
+        _ = list(cpg_sampler.retrieve_methylation_data(test_file))
+        mock_cpg.assert_called_once()
+
+
+def test_cov_methylation_line() -> None:
+    assert (
+        cpg_sampler._cov_methylation_line(
+            cpg_sampler.MethylationInfo(
+                chromosome="1",
+                position=2,
+                methylation_ratio=0.2,
+                experiment_count=5,
+                count_methylated=1,
+                count_unmethylated=4,
+            )
+        )
+        == "1\t2\t2\t20.0\t1\t4\n"
     )
 
-    filtered_profiles = cpg_sampler.filter_and_calculate_methylation(
-        test_methylation_profiles, 2
+
+def test_cpg_methylation_line() -> None:
+    assert (
+        cpg_sampler._cpg_methylation_line(
+            cpg_sampler.MethylationInfo(
+                chromosome="1",
+                position=2,
+                methylation_ratio=0.2,
+                experiment_count=5,
+                count_methylated=1,
+                count_unmethylated=4,
+                c_context="g",
+                strand="+",
+                trinucleotide_context="CGT",
+            )
+        )
+        == "chr1\t2\tg\t+\t5\t1\t4\t0.2\tCGT\tCpG\n"
     )
-    assert len(filtered_profiles) == 2
-    assert len(filtered_profiles["1"]) == 2
-    assert len(filtered_profiles["2"]) == 1
+
+    assert (
+        cpg_sampler._cpg_methylation_line(
+            cpg_sampler.MethylationInfo(
+                chromosome="1",
+                position=2,
+                methylation_ratio=0.2,
+                experiment_count=5,
+                count_methylated=1,
+                count_unmethylated=4,
+            )
+        )
+        == "chr1\t2\tN\tN\t5\t1\t4\t0.2\tNNN\tCpG\n"
+    )
+
+
+def test_deepcpg_methylation_line() -> None:
+    assert (
+        cpg_sampler._deepcpg_methylation_line(
+            cpg_sampler.MethylationInfo(
+                chromosome="1",
+                position=2,
+                methylation_ratio=0.2,
+                experiment_count=5,
+                count_methylated=1,
+                count_unmethylated=4,
+            )
+        )
+        == "chr1\t2\t0.2\t5\t1\t4\n"
+    )
+
+
+def test_methylation_line() -> None:
+    with (
+        mock.patch(
+            "qenetics.tools.cpg_sampler._cov_methylation_line"
+        ) as mock_cov,
+        mock.patch(
+            "qenetics.tools.cpg_sampler._cpg_methylation_line"
+        ) as mock_cpg,
+        mock.patch(
+            "qenetics.tools.cpg_sampler._deepcpg_methylation_line"
+        ) as mock_deepcpg,
+    ):
+        methylation_profile = cpg_sampler.MethylationInfo(
+            chromosome="1",
+            position=1,
+            methylation_ratio=0.5,
+            experiment_count=2,
+            count_methylated=1,
+            count_unmethylated=1,
+        )
+        cpg_sampler._methylation_line(
+            methylation_profile, cpg_sampler.MethylationFormat.COV
+        )
+        mock_cov.assert_called_once()
+
+        cpg_sampler._methylation_line(
+            methylation_profile, cpg_sampler.MethylationFormat.CPG
+        )
+        mock_cpg.assert_called_once()
+
+        cpg_sampler._methylation_line(
+            methylation_profile, cpg_sampler.MethylationFormat.DEEPCPG
+        )
+        mock_deepcpg.assert_called_once()
 
 
 @pytest.mark.parametrize(
@@ -206,41 +379,18 @@ def test_find_methylation_sequence(
         )
 
 
-def test_retrieve_all_cpg_sequences(
-    test_fasta_file: Path,
-    test_fasta_metadata: dict[str, cpg_sampler.SequenceInfo],
-    test_methylation_profiles: dict[
-        str, dict[int, cpg_sampler.MethylationInfo]
-    ],
-) -> None:
-    results: list[cpg_sampler.MethylationSequence] = list(
-        cpg_sampler.retrieve_all_cpg_sequences(
-            test_fasta_metadata, test_fasta_file, test_methylation_profiles, 8
-        )
-    )
-    assert len(results) == 2
-
-    assert results[0].sequence == "ACTGTGAC"
-    assert results[0].methylation_profile.count_methylated == 1
-    assert results[0].methylation_profile.count_non_methylated == 1
-
-    assert results[1].sequence == "NNACAAAA"
-    assert results[1].methylation_profile.count_methylated == 1
-    assert results[1].methylation_profile.count_non_methylated == 2
-
-
 @pytest.mark.parametrize(
     ("nucleotide", "expected_int"),
     [("A", 0), ("T", 1), ("C", 2), ("G", 3), ("N", -1)],
 )
-def test_nucleotide_character_to_int(
+def test_nucleotide_character_to_numpy(
     nucleotide: str, expected_int: int
 ) -> None:
     if expected_int >= 0:
         expected_array: NDArray[int] = np.array([0] * 4, dtype=int)
         expected_array[expected_int] = 1
         assert (
-            cpg_sampler.nucleotide_character_to_int(nucleotide)
+            cpg_sampler.nucleotide_character_to_numpy(nucleotide)
             == expected_array
         ).all()
     else:
@@ -248,7 +398,7 @@ def test_nucleotide_character_to_int(
             ValueError,
             match=f"{nucleotide} is not a valid nucleotide designator",
         ):
-            _ = cpg_sampler.nucleotide_character_to_int(nucleotide)
+            _ = cpg_sampler.nucleotide_character_to_numpy(nucleotide)
 
 
 @pytest.mark.parametrize(

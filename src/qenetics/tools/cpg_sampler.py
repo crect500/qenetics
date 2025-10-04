@@ -2,17 +2,25 @@ from __future__ import annotations
 
 from csv import DictReader
 from dataclasses import dataclass
+from enum import IntEnum
 from io import StringIO, TextIOBase
 import logging
 from pathlib import Path
 from typing import Generator
 
+import h5py
 import numpy as np
 from numpy.typing import NDArray
 
 from qenetics.qcpg.qcpg import string_to_nucleotides, Nucleodtide
 
 logger = logging.getLogger(__name__)
+
+
+class MethylationFormat(IntEnum):
+    COV = 1
+    CPG = 2
+    DEEPCPG = 3
 
 
 @dataclass
@@ -42,20 +50,30 @@ class SequenceInfo:
 @dataclass
 class MethylationInfo:
     """
-    Stores information about methylation experiments.
+    Stores information from a methylation experiment data file.
 
     Attributes
     ----------
-    count_methylated: The number of experiments that found the CpG site to be
-     methylated.
-    count_non_methylated: The number of experiments that found the CpG site to not be
-     methylated.
-    ratio_methylated: The fraction of the total experiments that were methylated.
+    chromosome: The chromosome of the sequence referenced.
+    position: The position of the cytosine of the CpG site.
+    methylation_ratio: The ratio of sites found to be methylated.
+    experiment_count: The number of experiments performed.
+    count_methylated: The number of samples found to be methylated.
+    count_unmethylated: The number of samples found not to be methylated.
+    c_context: The nucleotide at the position.
+    strand:
+    trinucleotide_context: The three next nucleotides at the position.
     """
 
+    chromosome: str
+    position: int
+    methylation_ratio: float
+    experiment_count: int
     count_methylated: int
-    count_non_methylated: int
-    ratio_methylated: float = -1.0
+    count_unmethylated: int
+    c_context: str = ""
+    strand: str = ""
+    trinucleotide_context: str = ""
 
 
 @dataclass
@@ -131,6 +149,8 @@ def write_ensembl_from_tengenomics(
     """
     block_read_size: int = 2**20  # 1MB read size
     sequence: str = ""
+    name: str = ""
+    is_chromosome: bool = False
     with open(tengenomics_filepath) as fd:
         buffer = StringIO(fd.read(block_read_size))
         line: str = buffer.readline()
@@ -258,104 +278,268 @@ def extract_fasta_metadata(fasta_file: Path) -> dict[str, SequenceInfo]:
     return annotations
 
 
-def _load_methlation_file_data(
-    methylation_file: Path,
-    methylation_data: dict[str, dict[int, MethylationInfo]],
-) -> None:
+def _process_cov_methylation_line(
+    line: str, minimum_samples: int = 1
+) -> MethylationInfo | None:
     """
-    Load methylation counts and associated reference genome positions from TSV file.
+    Process one line in a CpG methylation coverage file.
 
     Args
     ----
-    methylation_file: A TSV file containing methylation data.
-    methylation_data: An instantiated dictionary of methylation counts index by
-    chromosome and reference genome position.
-    """
-    with methylation_file.open() as fd:
-        entry: str = fd.readline()
-        while entry:
-            tab_split: list[str] = entry.split()
-            chromosome: str = tab_split[0]
-            position = int(tab_split[1])
-            count_methylated = int(tab_split[4])
-            count_non_methylated = int(tab_split[5])
-            if methylation_data.get(chromosome):
-                if methylation_data[chromosome].get(position):
-                    methylation_data[chromosome][
-                        position
-                    ].count_methylated += count_methylated
-                    methylation_data[chromosome][
-                        position
-                    ].count_non_methylated += count_non_methylated
-                else:
-                    methylation_data[chromosome][position] = MethylationInfo(
-                        count_methylated=count_methylated,
-                        count_non_methylated=count_non_methylated,
-                    )
-            else:
-                methylation_data[chromosome] = {
-                    position: MethylationInfo(
-                        count_methylated=count_methylated,
-                        count_non_methylated=count_non_methylated,
-                    )
-                }
-            entry = fd.readline()
-
-
-def combine_methylation_results(
-    methylation_directory: list[Path],
-) -> dict[str, dict[int, MethylationInfo]]:
-    """
-    Aggregate the methylation counts from multiple files.
-
-    Args
-    ----
-    methylation_directory: A directory containing TSV methylation profiles.
+    line: One line from the CpG methylation coverage file.
+    minimum_samples: The minimum samples for which to consider a sample.
 
     Returns
     -------
-    Methylation counts indexed by chromosome and reference genome position.
+    The CpG methylation experiment results.
     """
-    methylation_data: dict[str, dict[int, MethylationInfo]] = dict()
-    for methylation_file in methylation_directory:
-        _load_methlation_file_data(methylation_file, methylation_data)
+    line_split: list[str] = line.rstrip().split()
 
-    return methylation_data
+    count_methylated = int(line_split[4])
+    count_unmethylated = int(line_split[5])
+    total_experiments: int = count_methylated + count_unmethylated
+
+    if total_experiments < minimum_samples:
+        return None
+
+    return MethylationInfo(
+        chromosome=line_split[0],
+        position=int(line_split[1]),
+        methylation_ratio=count_methylated / total_experiments,
+        experiment_count=total_experiments,
+        count_methylated=count_methylated,
+        count_unmethylated=count_unmethylated,
+    )
 
 
-def filter_and_calculate_methylation(
-    methylation_profiles: dict[str, dict[int, MethylationInfo]],
-    minimum_count: int = 1,
-) -> dict[str, dict[int, MethylationInfo]]:
+def _process_cpg_methylation_line(
+    line: str, minimum_samples: int = 1
+) -> MethylationInfo | None:
     """
-    Remove methylation profiles with fewer than minimum counts and calculate ratio.
+    Process one line in a CpG methylation cpg file.
 
     Args
     ----
-    methylation_profiles: Location and count of methylation.
-    minimum_count: Profiles below minimum count are filtered out.
+    line: One line from the CpG methylation cpgcl file.
+    minimum_samples: The minimum samples for which to consider a sample.
 
     Returns
     -------
-    Remaining methylation profiles with methylation ratio filled in.
+    The CpG methylation experiment results.
     """
-    filtered_data: dict[str, dict[int, MethylationInfo]] = dict()
-    for chromosome, chromosome_profiles in methylation_profiles.items():
-        for position, methylation_profile in chromosome_profiles.items():
-            total_counted: int = (
-                methylation_profile.count_methylated
-                + methylation_profile.count_non_methylated
+    line_split: list[str] = line.rstrip().split()
+    total_experiments = int(line_split[4])
+    if total_experiments < minimum_samples:
+        return None
+
+    return MethylationInfo(
+        chromosome=line_split[0][3:],
+        position=int(line_split[1]),
+        methylation_ratio=float(line_split[7]),
+        experiment_count=total_experiments,
+        count_methylated=int(line_split[5]),
+        count_unmethylated=int(line_split[6]),
+        c_context=line[2],
+        strand=line[3],
+        trinucleotide_context=line[8],
+    )
+
+
+def _process_deepcpg_methylation_line(
+    line: str, minimum_count: int = 1
+) -> MethylationInfo | None:
+    line_split: list[str] = line.rstrip().split()
+    experiment_count: int = int(line_split[3])
+    if experiment_count < experiment_count:
+        return None
+
+    return MethylationInfo(
+        chromosome=line_split[0][3:],
+        position=int(line_split[1]),
+        methylation_ratio=float(line_split[2]),
+        experiment_count=experiment_count,
+        count_methylated=int(line_split[4]),
+        count_unmethylated=int(line_split[5]),
+    )
+
+
+def _process_methylation_line(
+    line: str,
+    data_format: MethylationFormat = MethylationFormat.COV,
+    minimum_samples: int = 1,
+) -> MethylationInfo | None:
+    """
+    Process one line from a methylation data file.
+
+    Args
+    ----
+    line: The line read from the methylation file.
+
+    Returns
+    -------
+    The methylation information, if a numbered chromosome. None otherwise.
+    """
+    if data_format == MethylationFormat.COV:
+        return _process_cov_methylation_line(line, minimum_samples)
+
+    if data_format == MethylationFormat.CPG:
+        return _process_cpg_methylation_line(line, minimum_samples)
+
+    if data_format == MethylationFormat.DEEPCPG:
+        return _process_deepcpg_methylation_line(line, minimum_samples)
+
+
+def _determine_format(methylation_filepath: Path) -> MethylationFormat:
+    """
+    Determine the format of the methylation file based on the filename.
+
+    Args
+    ----
+    methylation_filepath: The filepath of the methylation profiles.
+
+    Returns
+    -------
+    The format of the methylation file.
+    """
+    if "cov" in methylation_filepath.name:
+        return MethylationFormat.COV
+    if "cpg" in methylation_filepath.name:
+        return MethylationFormat.CPG
+    if "tsv" in methylation_filepath.name:
+        return MethylationFormat.DEEPCPG
+    else:
+        raise ValueError(
+            f"File format for {methylation_filepath} not recognized."
+        )
+
+
+def retrieve_methylation_data(
+    methylation_filepath: Path, minimum_samples: int = 1
+) -> Generator[MethylationInfo, None, None]:
+    """
+    Create a Generator for MethylationInfo objects from the methylation file.
+
+    Args
+    ----
+    methylation_filepath: The file storing methylation profiles
+
+    Returns
+    -------
+    Generator for MethylationInfo objects from the methylation file.
+    """
+    data_format: MethylationFormat = _determine_format(methylation_filepath)
+    with open(methylation_filepath) as fd:
+        for line in fd.readlines():
+            methylation_information: MethylationInfo | None = (
+                _process_methylation_line(line, data_format, minimum_samples)
             )
-            if total_counted >= minimum_count:
-                methylation_profile.ratio_methylated = (
-                    methylation_profile.count_methylated / total_counted
-                )
-                if filtered_data.get(chromosome):
-                    filtered_data[chromosome][position] = methylation_profile
-                else:
-                    filtered_data[chromosome] = {position: methylation_profile}
+            if not methylation_information:
+                continue
 
-    return filtered_data
+            yield methylation_information
+
+
+def _cov_methylation_line(methylation_profile: MethylationInfo) -> str:
+    return (
+        f"{methylation_profile.chromosome}\t"
+        f"{methylation_profile.position}\t"
+        f"{methylation_profile.position}\t"
+        f"{methylation_profile.methylation_ratio * 100.0}\t"
+        f"{methylation_profile.count_methylated}\t"
+        f"{methylation_profile.count_unmethylated}\n"
+    )
+
+
+def _cpg_methylation_line(methylation_profile: MethylationInfo) -> str:
+    if methylation_profile.c_context != "":
+        c_context: str = methylation_profile.c_context
+    else:
+        c_context = "N"
+
+    if methylation_profile.strand != "":
+        strand = methylation_profile.strand
+    else:
+        strand: str = "N"
+
+    if methylation_profile.trinucleotide_context != "":
+        trinucleotide_context = methylation_profile.trinucleotide_context
+    else:
+        trinucleotide_context: str = "NNN"
+
+    return (
+        f"chr{methylation_profile.chromosome}\t"
+        f"{methylation_profile.position}\t"
+        f"{c_context}\t"
+        f"{strand}\t"
+        f"{methylation_profile.experiment_count}\t"
+        f"{methylation_profile.count_methylated}\t"
+        f"{methylation_profile.count_unmethylated}\t"
+        f"{methylation_profile.methylation_ratio}\t"
+        f"{trinucleotide_context}\t"
+        "CpG\n"
+    )
+
+
+def _deepcpg_methylation_line(methylation_profile: MethylationInfo) -> str:
+    return (
+        f"chr{methylation_profile.chromosome}\t"
+        f"{methylation_profile.position}\t"
+        f"{methylation_profile.methylation_ratio}\t"
+        f"{methylation_profile.experiment_count}\t"
+        f"{methylation_profile.count_methylated}\t"
+        f"{methylation_profile.count_unmethylated}\n"
+    )
+
+
+def _methylation_line(
+    methylation_profile: MethylationInfo, methylation_format: MethylationFormat
+) -> str:
+    if methylation_format == MethylationFormat.COV:
+        return _cov_methylation_line(methylation_profile)
+
+    if methylation_format == MethylationFormat.CPG:
+        return _cpg_methylation_line(methylation_profile)
+
+    if methylation_format == MethylationFormat.DEEPCPG:
+        return _deepcpg_methylation_line(methylation_profile)
+
+
+def convert_methylation_profiles(
+    input_filepath: Path,
+    output_directory: Path,
+    output_format: MethylationFormat,
+    minimum_samples: int = 1,
+) -> None:
+    input_format: MethylationFormat = _determine_format(input_filepath)
+    if output_format == MethylationFormat.COV:
+        suffix: str = ".cov.txt"
+    elif output_format == MethylationFormat.CPG:
+        suffix = "cpg.txt"
+    elif output_format == MethylationFormat.DEEPCPG:
+        suffix = ".tsv"
+
+    if (
+        input_format == MethylationFormat.COV
+        or input_format == MethylationFormat.CPG
+    ):
+        output_filepath: Path = output_directory / (
+            input_filepath.stem.split(".")[0] + suffix
+        )
+    else:
+        output_filepath = output_directory / (input_filepath.stem + suffix)
+
+    with (
+        open(input_filepath) as input_fd,
+        open(output_filepath, "w") as output_fd,
+    ):
+        for line in input_fd.readlines():
+            read_methylation: MethylationInfo | None = (
+                _process_methylation_line(line, input_format, minimum_samples)
+            )
+            if read_methylation is not None:
+                output_fd.write(
+                    _methylation_line(read_methylation, output_format)
+                )
 
 
 def _read_sequence(
@@ -440,90 +624,6 @@ def find_methylation_sequence(
     return _read_sequence(file_descriptor, sequence_length, line_length)
 
 
-def retrieve_all_cpg_sequences(
-    genome_metadata: dict[str, SequenceInfo],
-    fasta_file: Path,
-    methylation_profiles: dict[str, dict[int, MethylationInfo]],
-    sequence_length: int,
-) -> Generator[MethylationSequence, None, None]:
-    """
-    Retrieve all sequences surrounding provided methylation sites.
-
-    Args
-    ----
-    genome_metadata: The reference genome file metadata.
-    fasta_file: The filepath to the reference genome data.
-    methylation_profiles: The methylation profile data.
-    sequence_length: The length of sequence to extract.
-
-    Yields
-    ------
-    Sequence information for each CpG site.
-    """
-    line_length: int = determine_line_length(fasta_file)
-    with fasta_file.open() as fd:
-        for chromosome, chromosome_data in methylation_profiles.items():
-            for position, methylation_profile in chromosome_data.items():
-                sequence: str = find_methylation_sequence(
-                    chromosome,
-                    position,
-                    genome_metadata,
-                    fd,
-                    sequence_length,
-                    line_length,
-                )
-                if sequence:
-                    yield MethylationSequence(
-                        sequence=sequence,
-                        methylation_profile=methylation_profile,
-                    )
-
-
-def load_and_save_all_cpg_sequences(
-    fasta_file: Path,
-    methylation_directory: list[Path],
-    sequence_length: int,
-    output_directory: Path,
-    minimum_count: int = 1,
-) -> None:
-    """
-    Extract all methylation sequences and save to a file.
-
-    Retrieve all sequences surrounding CpG sites with at least minimum_count methylation
-    samples.
-
-    Args
-    ----
-    fasta_file: The reference genome FASTA file.
-    methylation_directory: A list of empirical methylation profiles.
-    sequence_length: The length of the surrounding sequence to extract.
-    output_directory: The directory in which to save the sequences.
-    minimum_count: Filter out CpG sites below minimum_count.
-    """
-    metadata: dict[str, SequenceInfo] = extract_fasta_metadata(fasta_file)
-    methylation_profiles: dict[str, dict[int, MethylationInfo]] = (
-        filter_and_calculate_methylation(
-            combine_methylation_results(methylation_directory), minimum_count
-        )
-    )
-    sequences: Generator[MethylationSequence, None, None] = (
-        retrieve_all_cpg_sequences(
-            metadata, fasta_file, methylation_profiles, sequence_length
-        )
-    )
-    output_file: Path = (
-        output_directory
-        / f"cpg_sequences_s{sequence_length}_m{minimum_count}.csv"
-    )
-    with output_file.open("w") as fd:
-        fd.write("sequence,ratio_methylated\n")
-        for sequence_info in sequences:
-            fd.write(sequence_info.sequence)
-            fd.write(",")
-            fd.write(str(sequence_info.methylation_profile.ratio_methylated))
-            fd.write("\n")
-
-
 def load_methylation_samples(
     methylation_file: Path, threshold: float = 0.5, negative_state: int = 0
 ) -> tuple[list[list[Nucleodtide]], list[int]]:
@@ -598,7 +698,18 @@ def sequence_to_numpy(sequence: list[Nucleodtide]) -> NDArray[int]:
     )
 
 
-def nucleotide_character_to_int(nucleotide: str) -> NDArray[int]:
+def nucleotide_character_to_numpy(nucleotide: str) -> NDArray[int]:
+    """
+    Convert a nucleotide designator to a one-hot array.
+
+    Args
+    ----
+    nucleotide: The ASCII nucleotide designator.
+
+    Returns
+    -------
+    The one-hot encoded array.
+    """
     if nucleotide == "A":
         return np.array([1, 0, 0, 0], dtype=int)
     if nucleotide == "T":
@@ -612,12 +723,23 @@ def nucleotide_character_to_int(nucleotide: str) -> NDArray[int]:
 
 
 def nucleotide_string_to_numpy(sequence: str) -> NDArray[int] | None:
+    """
+    Convert a list of ASCII nucleotide designators to one-hot arrays.
+
+    Args
+    ----
+    sequence: A list of ASCII nucleotide designators.
+
+    Returns
+    -------
+    A matrix of one-hot encoded values.
+    """
     if "N" in sequence:
         return None
     else:
         return np.array(
             [
-                nucleotide_character_to_int(nucleotide)
+                nucleotide_character_to_numpy(nucleotide)
                 for nucleotide in sequence
             ],
             dtype=int,
@@ -625,8 +747,20 @@ def nucleotide_string_to_numpy(sequence: str) -> NDArray[int] | None:
 
 
 def samples_to_numpy(
-    methylation_filepath: Path, threshold: float = 0.5, negative_state: int = 0
+    methylation_filepath: Path, threshold: float = 0.5
 ) -> tuple[NDArray[int], NDArray[int]]:
+    """
+    Create input and truth samples for sequences of nucleotides and their methylations.
+
+    Args
+    ----
+    methylation_filepath: The filepath of a file containing methylation_profiles.
+    threshold: The threshold at which to consider a site methylated.
+
+    Returns
+    -------
+    A matrix of one-hot input sample encodings and the truth values.
+    """
     logger.debug(
         f"Loading methylation data from {methylation_filepath} with threshold "
         f"{threshold}."
@@ -648,3 +782,67 @@ def samples_to_numpy(
         ), np.array(
             [row[1] for row in read_data if row[0] is not None], dtype=int
         )
+
+
+def initialize_h5_dataset(
+    methylation_directory: Path,
+    sequence_length: int,
+    dataset_filepath: Path,
+    minimum_samples: int = 1,
+) -> list[MethylationInfo]:
+    default_batch_size: int = 128
+    unique_nucleotide_quantity: int = 4
+    chunk_size: tuple[int, int, int] = (
+        default_batch_size,
+        sequence_length,
+        unique_nucleotide_quantity,
+    )
+    methylation_profiles: list[MethylationInfo] = []
+    for methylation_filepath in methylation_directory.iterdir():
+        for methylation_profile in retrieve_methylation_data(
+            methylation_filepath
+        ):
+            if methylation_profile.experiment_count >= minimum_samples:
+                methylation_profiles.append(methylation_profile)
+
+    with h5py.File(dataset_filepath, "w") as fd:
+        _ = fd.create_dataset(
+            "methylation_sequences",
+            shape=(
+                len(methylation_profiles),
+                sequence_length,
+                unique_nucleotide_quantity,
+            ),
+            chunk_size=chunk_size,
+            dtype="i8",
+        )
+        _ = fd.create_dataset(
+            "methylation", shape=(len(methylation_profiles)), dtype=bool
+        )
+
+    return methylation_profiles
+
+
+def fill_h5_dataset(
+    methylation_profiles: list[MethylationInfo],
+    fasta_filepath: Path,
+    dataset_filepath: Path,
+    sequence_length: int,
+) -> None:
+    fasta_metadata: dict[str, SequenceInfo] = extract_fasta_metadata(
+        fasta_filepath
+    )
+    fasta_line_length: int = determine_line_length(fasta_filepath)
+    with (
+        h5py.File(dataset_filepath, "r") as dataset_fd,
+        open(fasta_filepath) as fasta_fd,
+    ):
+        for index, methylation_profile in methylation_profiles:
+            find_methylation_sequence(
+                chromosome=methylation_profile.chromosome,
+                position=methylation_profile.position,
+                genome_metadata=fasta_metadata,
+                file_descriptor=fasta_fd,
+                sequence_length=sequence_length,
+                line_length=fasta_line_length,
+            )

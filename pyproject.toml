@@ -9,6 +9,7 @@ description="Quantum algorithms for genetic data machine learning models"
 requires-python=">=3.11"
 authors=[{name="Christopher Rector", email="chrisrector14@gmail.com"}]
 dependencies=[
+    "h5py",
     "jax",
     "keras",
     "numpy",
