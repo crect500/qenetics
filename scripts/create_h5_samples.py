@@ -59,7 +59,7 @@ def _parse_script_args() -> Namespace:
 if __name__ == "__main__":
     args: Namespace = _parse_script_args()
     create_h5_dataset_from_methylation_profiles(
-        args.methylation_filepath,
+        args.methylation_directory,
         args.fasta_filepath,
         args.output_directory,
         args.sequence_length,

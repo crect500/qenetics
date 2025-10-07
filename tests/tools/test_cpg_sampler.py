@@ -462,86 +462,77 @@ def test_record_methylation_profiles(test_methylation_file: Path) -> None:
     assert len(profiles_by_chromosome["1"]) == 3
 
 
-def test_create_h5_files() -> None:
-    experiment_names: list[str] = ["test1", "test2"]
+@pytest.mark.parametrize(
+    ("sequence", "expected_result"),
+    [
+        ("ACGT", True),
+        ("ATCGTA", True),
+        ("AGCT", False),
+        ("CGAT", False),
+        ("ATCG", False),
+    ],
+)
+def test_validate_sequence(sequence: str, expected_result: bool) -> None:
+    assert cpg_sampler._validate_sequence(sequence) == expected_result
+
+
+def test_retrieve_chromosome_sequences() -> None:
+    experiment_names: list[str] = ["test1", "test2", "test3"]
     unique_nucleotides_quantity: int = 4
-    profiles_by_chromosome: dict[str, dict[int, dict[str, float]]] = {
-        "1": {1: {"test1": 0.0, "test2": 0.25}, 2: {"test2": 1.0}},
-        "2": {3: {"test1": 0.5}},
+    profiles_by_position: dict[int, dict[str, float]] = {
+        1: {"test1": 0.0, "test2": 0.25},
+        2: {"test2": 0.5},
+        3: {"test1": 0.75},
+        4: {"test3": 1.0},
     }
     sequence_length: int = 8
-    with TemporaryDirectory() as temp_dir:
-        temp_path = Path(temp_dir)
-        h5_filepaths: list[Path] = cpg_sampler._create_h5_files(
-            profiles_by_chromosome, experiment_names, temp_path, sequence_length
+    valid_sequence: str = "ACTCGCTG"
+    invalid_sequence: str = "ACTTTCTG"
+    nan_sequence: str = "NNNNNNNN"
+    with mock.patch(
+        "qenetics.tools.cpg_sampler.find_methylation_sequence"
+    ) as mock_find:
+        mock_find.side_effect = [
+            valid_sequence,
+            invalid_sequence,
+            nan_sequence,
+            valid_sequence,
+        ]
+        sequences, methylation_ratios = (
+            cpg_sampler._retrieve_chromosome_sequences(
+                profiles_by_position=profiles_by_position,
+                chromosome="1",
+                fasta_file_descriptor=None,
+                fasta_metadata={},
+                fasta_line_length=20,
+                sequence_length=sequence_length,
+                experiment_names=experiment_names,
+            )
         )
-        with h5py.File(temp_path / "chr1.h5") as fd:
-            assert fd["methylation_sequences"].shape == (
-                len(profiles_by_chromosome["1"]),
-                sequence_length,
-                unique_nucleotides_quantity,
-            )
-            assert len(fd["methylation_ratios"].keys()) == len(experiment_names)
 
-        with h5py.File(temp_path / "chr2.h5") as fd:
-            assert fd["methylation_sequences"].shape == (
-                len(profiles_by_chromosome["2"]),
-                sequence_length,
-                unique_nucleotides_quantity,
-            )
-            assert len(fd["methylation_ratios"].keys()) == len(experiment_names)
-
-    assert h5_filepaths == [temp_path / "chr1.h5", temp_path / "chr2.h5"]
+    assert sequences.shape == (2, sequence_length, unique_nucleotides_quantity)
+    assert methylation_ratios[0][0] == 0.0
+    assert methylation_ratios[1][2] == 1.0
 
 
-def test_fill_h5_dataset(test_fasta_file: Path) -> None:
-    experiment_names: list[str] = ["test1", "test2"]
-    sequence_length: int = 8
-    profiles_by_chromosome: dict[str, dict[int, dict[str, float]]] = {
-        "1": {1: {"test1": 0.0, "test2": 0.25}, 2: {"test2": 1.0}},
-        "2": {3: {"test1": 0.5}},
-    }
+def test_create_h5_dataset() -> None:
+    experiment_names: list[str] = ["test1", "test2", "test3"]
+    sequences: np.ndarray = np.array(
+        [[[1, 0, 0, 0], [0, 1, 0, 0]], [[0, 0, 1, 0], [0, 0, 0, 1]]], dtype=int
+    )
+    methylation_ratios: np.ndarray = np.array(
+        [[0.0, np.nan, np.nan], [np.nan, 0.50, 1.0]]
+    )
     with TemporaryDirectory() as temp_dir:
-        temp_path = Path(temp_dir)
-        h5_filepaths: list[Path] = cpg_sampler._create_h5_files(
-            profiles_by_chromosome, experiment_names, temp_path, sequence_length
+        temp_h5_filepath = Path(temp_dir) / "chr1.h5"
+        cpg_sampler._create_h5_dataset(
+            temp_h5_filepath, sequences, methylation_ratios, experiment_names
         )
-        with mock.patch(
-            "qenetics.tools.cpg_sampler.find_methylation_sequence"
-        ) as mock_find:
-            sequence: str = "ACTGACTG"
-            mock_find.return_value = sequence
-            cpg_sampler._fill_h5_dataset(
-                profiles_by_chromosome,
-                test_fasta_file,
-                h5_filepaths,
-                sequence_length,
-            )
-
-        with h5py.File(temp_path / "chr1.h5") as fd:
-            assert (
-                fd["methylation_sequences"][0]
-                == cpg_sampler.nucleotide_string_to_numpy(sequence)
-            ).all()
-            assert (
-                fd["methylation_sequences"][1]
-                == cpg_sampler.nucleotide_string_to_numpy(sequence)
-            ).all()
-            assert (
-                fd["methylation_ratios"]["test1"][0]
-                == profiles_by_chromosome["1"][1]["test1"]
-            )
-            assert (
-                fd["methylation_ratios"]["test2"][1]
-                == profiles_by_chromosome["1"][2]["test2"]
-            )
-
-        with h5py.File(temp_path / "chr2.h5") as fd:
-            assert (
-                fd["methylation_sequences"][0]
-                == cpg_sampler.nucleotide_string_to_numpy(sequence)
-            ).all()
-            assert (
-                fd["methylation_ratios"]["test1"][0]
-                == profiles_by_chromosome["2"][3]["test1"]
-            )
+        with h5py.File(temp_h5_filepath) as fd:
+            assert fd["methylation_sequences"].shape == (2, 2, 4)
+            assert fd["methylation_ratios"]["test1"][0] == 0.0
+            assert np.isnan(fd["methylation_ratios"]["test1"][1])
+            assert np.isnan(fd["methylation_ratios"]["test2"][0])
+            assert fd["methylation_ratios"]["test2"][1] == 0.5
+            assert np.isnan(fd["methylation_ratios"]["test3"][0])
+            assert fd["methylation_ratios"]["test3"][1] == 1.0
