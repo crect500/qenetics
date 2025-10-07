@@ -31,7 +31,7 @@ def _parse_script_args() -> Namespace:
         "-f",
         "--format",
         dest="output_format",
-        type=Path,
+        type=str,
         required=True,
         help="The desired format of the output files. Options are cov, cpg, deepcpg",
     )

@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+from contextlib import ExitStack
 from csv import DictReader
 from dataclasses import dataclass
 from enum import IntEnum
 from io import StringIO, TextIOBase
 import logging
 from pathlib import Path
-from typing import Generator
+from typing import Any, Generator
 
 import h5py
 import numpy as np
@@ -482,7 +483,7 @@ def _cpg_methylation_line(methylation_profile: MethylationInfo) -> str:
 
 def _deepcpg_methylation_line(methylation_profile: MethylationInfo) -> str:
     return (
-        f"chr{methylation_profile.chromosome}\t"
+        f"{methylation_profile.chromosome}\t"
         f"{methylation_profile.position}\t"
         f"{methylation_profile.methylation_ratio}\t"
         f"{methylation_profile.experiment_count}\t"
@@ -784,65 +785,168 @@ def samples_to_numpy(
         )
 
 
-def initialize_h5_dataset(
+def _increment_or_create_entry(dictionary: dict[Any, ...], key: Any) -> None:
+    entry: Any | None = dictionary[key]
+    if entry is None:
+        dictionary[key] = 1
+    else:
+        dictionary[key] += 1
+
+
+def read_methylation_files(
     methylation_directory: Path,
-    sequence_length: int,
-    dataset_filepath: Path,
     minimum_samples: int = 1,
 ) -> list[MethylationInfo]:
-    default_batch_size: int = 128
-    unique_nucleotide_quantity: int = 4
-    chunk_size: tuple[int, int, int] = (
-        default_batch_size,
-        sequence_length,
-        unique_nucleotide_quantity,
-    )
+    counts_by_chromosome: dict[str, int] = {}
     methylation_profiles: list[MethylationInfo] = []
     for methylation_filepath in methylation_directory.iterdir():
         for methylation_profile in retrieve_methylation_data(
             methylation_filepath
         ):
             if methylation_profile.experiment_count >= minimum_samples:
+                _increment_or_create_entry(
+                    counts_by_chromosome, methylation_profile.chromosome
+                )
                 methylation_profiles.append(methylation_profile)
-
-    with h5py.File(dataset_filepath, "w") as fd:
-        _ = fd.create_dataset(
-            "methylation_sequences",
-            shape=(
-                len(methylation_profiles),
-                sequence_length,
-                unique_nucleotide_quantity,
-            ),
-            chunk_size=chunk_size,
-            dtype="i8",
-        )
-        _ = fd.create_dataset(
-            "methylation", shape=(len(methylation_profiles)), dtype=bool
-        )
 
     return methylation_profiles
 
 
-def fill_h5_dataset(
-    methylation_profiles: list[MethylationInfo],
+def _record_methylation_profiles(
+    methylation_directory: Path, minimum_samples: int = 1
+) -> dict[str, dict[int, dict[str, float]]]:
+    profiles_by_chromosome: dict[str, dict[int, dict[str, float]]] = {}
+    for filepath in methylation_directory.iterdir():
+        experiment_name: str = filepath.stem.split(".")[0]
+        for methylation_profile in retrieve_methylation_data(
+            filepath, minimum_samples
+        ):
+            profiles_by_position: dict[int, dict[str, float]] | None = (
+                profiles_by_chromosome.get(methylation_profile.chromosome)
+            )
+            if profiles_by_position is None:
+                profiles_by_chromosome[methylation_profile.chromosome] = {
+                    methylation_profile.position: {
+                        experiment_name: methylation_profile.methylation_ratio
+                    }
+                }
+            else:
+                profiles_by_experiment: dict[str, float] | None = (
+                    profiles_by_position.get(methylation_profile.position)
+                )
+                if profiles_by_experiment is None:
+                    profiles_by_position[methylation_profile.position] = {
+                        experiment_name: methylation_profile.methylation_ratio
+                    }
+                else:
+                    profiles_by_experiment[experiment_name] = (
+                        methylation_profile.methylation_ratio
+                    )
+
+    return profiles_by_chromosome
+
+
+def _create_h5_files(
+    profiles_by_chromosome: dict[str, dict[int, dict[str, float]]],
+    experiment_names: list[str],
+    dataset_directory: Path,
+    sequence_length: int,
+) -> list[Path]:
+    unique_nucleotide_quantity: int = 4
+    h5_filepaths: list[Path] = []
+    for chromosome, profiles_per_position in profiles_by_chromosome.items():
+        h5_filepath: Path = dataset_directory / ("chr" + chromosome + ".h5")
+        h5_filepaths.append(h5_filepath)
+        sample_quanity: int = len(profiles_per_position)
+        with h5py.File(h5_filepath, "w") as fd:
+            _ = fd.create_dataset(
+                "methylation_sequences",
+                shape=(
+                    sample_quanity,
+                    sequence_length,
+                    unique_nucleotide_quantity,
+                ),
+                chunks=True,
+                dtype="i4",
+            )
+            output_group = fd.create_group("methylation_ratios")
+            for experiment_name in experiment_names:
+                output_group.create_dataset(
+                    experiment_name,
+                    shape=(sample_quanity,),
+                    chunks=True,
+                    dtype="f4",
+                )
+
+    return h5_filepaths
+
+
+def _fill_h5_dataset(
+    profiles_by_chromosome: dict[str, dict[int, dict[str, float]]],
     fasta_filepath: Path,
-    dataset_filepath: Path,
+    h5_filepaths: list[Path],
     sequence_length: int,
 ) -> None:
     fasta_metadata: dict[str, SequenceInfo] = extract_fasta_metadata(
         fasta_filepath
     )
     fasta_line_length: int = determine_line_length(fasta_filepath)
-    with (
-        h5py.File(dataset_filepath, "r") as dataset_fd,
-        open(fasta_filepath) as fasta_fd,
-    ):
-        for index, methylation_profile in methylation_profiles:
-            find_methylation_sequence(
-                chromosome=methylation_profile.chromosome,
-                position=methylation_profile.position,
-                genome_metadata=fasta_metadata,
-                file_descriptor=fasta_fd,
-                sequence_length=sequence_length,
-                line_length=fasta_line_length,
+    with ExitStack() as exit_stack, open(fasta_filepath) as fasta_fd:
+        files_by_chromosome: dict[str, h5py.File] = {
+            filepath.stem[3:]: exit_stack.enter_context(
+                h5py.File(filepath, "r+")
             )
+            for filepath in h5_filepaths
+        }
+        for chromosome, profiles_by_position in profiles_by_chromosome.items():
+            for index, (position, profiles_by_experiment) in enumerate(
+                profiles_by_position.items()
+            ):
+                sequence: str | None = find_methylation_sequence(
+                    chromosome=chromosome,
+                    position=position,
+                    genome_metadata=fasta_metadata,
+                    file_descriptor=fasta_fd,
+                    sequence_length=sequence_length,
+                    line_length=fasta_line_length,
+                )
+                if sequence is not None:
+                    numpy_sequence: NDArray[int] | None = (
+                        nucleotide_string_to_numpy(sequence)
+                    )
+                    if numpy_sequence is not None:
+                        files_by_chromosome[chromosome][
+                            "methylation_sequences"
+                        ][index] = nucleotide_string_to_numpy(sequence)
+                for (
+                    experiment_name,
+                    methylation_ratio,
+                ) in profiles_by_experiment.items():
+                    files_by_chromosome[chromosome]["methylation_ratios"][
+                        experiment_name
+                    ][index] = methylation_ratio
+
+
+def create_h5_dataset_from_methylation_profiles(
+    methylation_directory: Path,
+    fasta_filepath: Path,
+    dataset_directory: Path,
+    sequence_length: int,
+    minimum_samples: int = 1,
+) -> None:
+    experiment_names: list[str] = [
+        filename.stem.split(".")[0]
+        for filename in methylation_directory.iterdir()
+    ]
+    profiles_by_chromosome: dict[str, dict[int, dict[str, float]]] = (
+        _record_methylation_profiles(methylation_directory, minimum_samples)
+    )
+    h5_filepaths: list[Path] = _create_h5_files(
+        profiles_by_chromosome,
+        experiment_names,
+        dataset_directory,
+        sequence_length,
+    )
+    _fill_h5_dataset(
+        profiles_by_chromosome, fasta_filepath, h5_filepaths, sequence_length
+    )

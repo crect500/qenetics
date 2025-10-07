@@ -1,7 +1,9 @@
 from pathlib import Path
+import shutil
 from tempfile import TemporaryDirectory
 from unittest import mock
 
+import h5py
 import numpy as np
 from numpy.typing import NDArray
 import pytest
@@ -282,7 +284,7 @@ def test_deepcpg_methylation_line() -> None:
                 count_unmethylated=4,
             )
         )
-        == "chr1\t2\t0.2\t5\t1\t4\n"
+        == "1\t2\t0.2\t5\t1\t4\n"
     )
 
 
@@ -440,10 +442,106 @@ def test_samples_to_numpy(
     samples, methylations = cpg_sampler.samples_to_numpy(
         test_input_file, threshold
     )
-    print(samples)
     assert np.sum(methylations) == quantity_methylated
     assert samples.shape == (
         valid_samples,
         sequence_length,
         unique_nucleotides_quantity,
     )
+
+
+def test_record_methylation_profiles(test_methylation_file: Path) -> None:
+    with TemporaryDirectory() as temp_file:
+        temp_path = Path(temp_file)
+        shutil.copy(test_methylation_file, temp_path)
+        profiles_by_chromosome: dict[str, dict[int, dict[str, float]]] = (
+            cpg_sampler._record_methylation_profiles(temp_path)
+        )
+
+    assert len(profiles_by_chromosome) == 3
+    assert len(profiles_by_chromosome["1"]) == 3
+
+
+def test_create_h5_files() -> None:
+    experiment_names: list[str] = ["test1", "test2"]
+    unique_nucleotides_quantity: int = 4
+    profiles_by_chromosome: dict[str, dict[int, dict[str, float]]] = {
+        "1": {1: {"test1": 0.0, "test2": 0.25}, 2: {"test2": 1.0}},
+        "2": {3: {"test1": 0.5}},
+    }
+    sequence_length: int = 8
+    with TemporaryDirectory() as temp_dir:
+        temp_path = Path(temp_dir)
+        h5_filepaths: list[Path] = cpg_sampler._create_h5_files(
+            profiles_by_chromosome, experiment_names, temp_path, sequence_length
+        )
+        with h5py.File(temp_path / "chr1.h5") as fd:
+            assert fd["methylation_sequences"].shape == (
+                len(profiles_by_chromosome["1"]),
+                sequence_length,
+                unique_nucleotides_quantity,
+            )
+            assert len(fd["methylation_ratios"].keys()) == len(experiment_names)
+
+        with h5py.File(temp_path / "chr2.h5") as fd:
+            assert fd["methylation_sequences"].shape == (
+                len(profiles_by_chromosome["2"]),
+                sequence_length,
+                unique_nucleotides_quantity,
+            )
+            assert len(fd["methylation_ratios"].keys()) == len(experiment_names)
+
+    assert h5_filepaths == [temp_path / "chr1.h5", temp_path / "chr2.h5"]
+
+
+def test_fill_h5_dataset(test_fasta_file: Path) -> None:
+    experiment_names: list[str] = ["test1", "test2"]
+    sequence_length: int = 8
+    profiles_by_chromosome: dict[str, dict[int, dict[str, float]]] = {
+        "1": {1: {"test1": 0.0, "test2": 0.25}, 2: {"test2": 1.0}},
+        "2": {3: {"test1": 0.5}},
+    }
+    with TemporaryDirectory() as temp_dir:
+        temp_path = Path(temp_dir)
+        h5_filepaths: list[Path] = cpg_sampler._create_h5_files(
+            profiles_by_chromosome, experiment_names, temp_path, sequence_length
+        )
+        with mock.patch(
+            "qenetics.tools.cpg_sampler.find_methylation_sequence"
+        ) as mock_find:
+            sequence: str = "ACTGACTG"
+            mock_find.return_value = sequence
+            cpg_sampler._fill_h5_dataset(
+                profiles_by_chromosome,
+                test_fasta_file,
+                h5_filepaths,
+                sequence_length,
+            )
+
+        with h5py.File(temp_path / "chr1.h5") as fd:
+            assert (
+                fd["methylation_sequences"][0]
+                == cpg_sampler.nucleotide_string_to_numpy(sequence)
+            ).all()
+            assert (
+                fd["methylation_sequences"][1]
+                == cpg_sampler.nucleotide_string_to_numpy(sequence)
+            ).all()
+            assert (
+                fd["methylation_ratios"]["test1"][0]
+                == profiles_by_chromosome["1"][1]["test1"]
+            )
+            assert (
+                fd["methylation_ratios"]["test2"][1]
+                == profiles_by_chromosome["1"][2]["test2"]
+            )
+
+        with h5py.File(temp_path / "chr2.h5") as fd:
+            assert (
+                fd["methylation_sequences"][0]
+                == cpg_sampler.nucleotide_string_to_numpy(sequence)
+            ).all()
+            assert (
+                fd["methylation_ratios"]["test1"][0]
+                == profiles_by_chromosome["2"][3]["test1"]
+            )
