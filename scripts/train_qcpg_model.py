@@ -2,14 +2,7 @@ from argparse import ArgumentParser, Namespace
 import logging
 from pathlib import Path
 
-import numpy as np
-from numpy.typing import NDArray
-import pennylane as qml
-from pennylane import numpy as pnp
-from sklearn.model_selection import train_test_split
-
 from qenetics.qcpg import qcpg
-from qenetics.tools.cpg_sampler import load_methylation_samples
 
 UNIQUE_NUCLEOTIDE_QUANTITY: int = 4
 
@@ -19,18 +12,36 @@ logger = logging.getLogger(__name__)
 
 def _parse_script_args() -> Namespace:
     parser = ArgumentParser(
-        "extract_save_methylation_sequences ",
-        usage="python3 extract_save_methylation_sequence.py ",
+        "train_qcpg_model",
+        usage="python3 train_qcpg_model.py ",
         description="Train the parameters of a quantum circuit that predicts whether "
         "CpG sites are methylated given an input nucleotide sequence.",
     )
     parser.add_argument(
-        "-m",
-        "--methylation-file",
-        dest="methylation_file",
+        "-d",
+        "--data-directory",
+        dest="data_directory",
         required=True,
         type=Path,
-        help="The filepath to the methylation sequence data.",
+        help="The filepath to H5 methylation files storing methylation data.",
+    )
+    parser.add_argument(
+        "--training-chromosomes",
+        dest="training_chromosomes",
+        required=False,
+        type=str,
+        nargs="+",
+        default=["1", "3", "5", "7", "9", "11"],
+        help="Specify the chromosomes to use as training data.",
+    )
+    parser.add_argument(
+        "--validation-chromosomes",
+        dest="validation_chromosomes",
+        required=False,
+        type=str,
+        nargs="+",
+        default=["2", "4", "6", "8", "10", "12"],
+        help="Specify the chromosomes to use as validation data.",
     )
     parser.add_argument(
         "--max-iterations",
@@ -51,8 +62,8 @@ def _parse_script_args() -> Namespace:
     )
     parser.add_argument(
         "-o",
-        "--output-directory",
-        dest="output_directory",
+        "--output-filepath",
+        dest="output_filepath",
         required=True,
         type=Path,
         help="The path at which to save the trained parameters.",
@@ -65,6 +76,15 @@ def _parse_script_args() -> Namespace:
         type=float,
         default=0.5,
         help="The threshold at which to consider a site positively methylated.",
+    )
+    parser.add_argument(
+        "-r",
+        "--learning-rate",
+        dest="learning_rate",
+        required=False,
+        type=float,
+        default=0.0001,
+        help="The learning rate for the optimizer.",
     )
     parser.add_argument(
         "--seed",
@@ -90,42 +110,14 @@ if __name__ == "__main__":
     args: Namespace = _parse_script_args()
     if args.log_directory:
         logging.basicConfig(
-            filename=args.log_directory / "qcpg.log", level=logging.INFO
+            filename=args.log_directory / "qcpg_train.log", level=logging.INFO
         )
-    sequences, methylation = load_methylation_samples(args.methylation_file)
-    (
-        training_sequences,
-        test_sequences,
-        training_methylation,
-        test_methylation,
-    ) = train_test_split(sequences, methylation, random_state=args.seed)
-    logger.info(
-        f"Training with {len(training_sequences)} samples and testing with "
-        f"{len(test_sequences)} samples"
+    qcpg.TrainingParameters(
+        data_directory=args.data_directory,
+        output_filepath=args.output_filepath,
+        training_chromosomes=args.training_chromosomes,
+        validation_chromosomes=args.validation_chromosomes,
+        layer_quantity=args.layer_quantity,
+        epochs=args.max_iterations,
+        learning_rate=args.learning_rate,
     )
-    address_register_size: int = qcpg.calculate_address_register_size(
-        len(training_sequences[0])
-    )
-    params_shape = qml.StronglyEntanglingLayers.shape(
-        n_layers=args.layer_quantity,
-        n_wires=address_register_size + UNIQUE_NUCLEOTIDE_QUANTITY,
-    )
-    parameters: NDArray = pnp.random.default_rng().random(size=params_shape)
-    metrics_file: Path = args.output_directory / "metrics.csv"
-    trained_parameters, loss_history, metrics_history = (
-        qcpg.train_strongly_entangled_qcpg_circuit(
-            parameters,
-            training_sequences,
-            training_methylation,
-            test_sequences,
-            test_methylation,
-            metrics_file,
-            args.max_iterations,
-        )
-    )
-    with metrics_file.open("wa") as fd:
-        for loss, test_metrics in zip(
-            loss_history, metrics_history, strict=True
-        ):
-            fd.write(f"Metrics: {test_metrics}\nLoss: {loss}\n")
-    np.save(args.output_directory / "model.npy", trained_parameters)

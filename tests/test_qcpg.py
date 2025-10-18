@@ -1,11 +1,14 @@
 from math import ceil, log2
+from unittest import mock
 
 from numpy.typing import NDArray
 import pennylane as qml
 from pennylane import numpy as pnp
 import pytest
+from torch import nn, optim, tensor
 
-from qenetics.qcpg import qcpg
+from qenetics.qcpg import qcpg, qcpg_models
+from qenetics.tools import cpg_sampler
 
 UNIQUE_NUCLEOTIDE_QUANTITY: int = 4
 
@@ -37,84 +40,6 @@ def test_convert_nucleotide_to_enum(nucleotide_character: str) -> None:
             ValueError, match="not recognized as valid nucleotide"
         ):
             _ = qcpg.convert_nucleotide_to_enum(nucleotide_character)
-
-
-@pytest.mark.parametrize(
-    ("input", "qubit_quantity"), [(1, 1), (2, 1), (3, 2), (4, 2), (5, 3)]
-)
-def test_calculate_address_register_size(
-    input: int, qubit_quantity: int
-) -> None:
-    assert qcpg.calculate_address_register_size(input) == qubit_quantity
-
-
-@pytest.mark.parametrize(
-    ("nucleotide_value", "index"),
-    [(0, 0), (1, 0), (2, 0), (3, 0), (0, 1), (1, 1), (0, 2), (0, 2), (0, 8)],
-)
-def test_single_encode_nucleotide(nucleotide_value: int, index: int) -> None:
-    if index == 0:
-        address_register_size: int = 1
-    else:
-        address_register_size = ceil(log2(index)) + 1
-    nucleotide = qcpg.Nucleodtide(nucleotide_value)
-    circuit_width: int = address_register_size + UNIQUE_NUCLEOTIDE_QUANTITY
-    address_range: int = 2**address_register_size
-    passive_nucleotides: list[int] = list(range(UNIQUE_NUCLEOTIDE_QUANTITY))
-    passive_nucleotides.remove(nucleotide_value)
-    device = qml.device("default.qubit", wires=circuit_width)
-
-    @qml.qnode(device)
-    def run_circuit() -> qml.measurements.ProbabilityMP:
-        for qubit_index in range(address_register_size):
-            qml.Hadamard(qubit_index)
-        qcpg.single_encode_nucleotide(nucleotide, index, address_register_size)
-        return qml.probs(wires=list(range(circuit_width)))
-
-    target_index_list: list[int] = [0] * 4
-    target_index_list[nucleotide_value] = 1
-    target_index_string: str = bin(index).split("b")[1] + "".join(
-        str(i) for i in target_index_list
-    )
-    target_index: int = int(target_index_string, 2)
-    results: qml.measurements.ProbabilityMP = run_circuit()
-    assert results.sum() == pytest.approx(1.0)
-    assert results[target_index] == pytest.approx(1 / address_range)
-
-
-@pytest.mark.parametrize(
-    ("sequence_values"), [[0], [1], [0, 0], [0, 1], [0, 1, 2]]
-)
-def test_singe_encode_all_nucleotides(sequence_values: list[int]) -> None:
-    sequence: list[qcpg.Nucleodtide] = [
-        qcpg.Nucleodtide(value) for value in sequence_values
-    ]
-    address_register_size: int = qcpg.calculate_address_register_size(
-        len(sequence_values)
-    )
-    circuit_width: int = address_register_size + UNIQUE_NUCLEOTIDE_QUANTITY
-
-    device = qml.device("default.qubit", wires=circuit_width)
-
-    @qml.qnode(device)
-    def run_circuit() -> qml.measurements.ProbabilityMP:
-        for qubit_index in range(address_register_size):
-            qml.Hadamard(qubit_index)
-        qcpg.single_encode_all_nucleotides(sequence)
-        return qml.probs(wires=list(range(circuit_width)))
-
-    results: qml.measurements.ProbabilityMP = run_circuit()
-    assert results.sum() == pytest.approx(1.0)
-    for index, nucleotide in enumerate(sequence_values):
-        target_index_list: list[int] = [0] * 4
-        target_index_list[nucleotide] = 1
-        target_index_string: str = bin(index).split("b")[1] + "".join(
-            str(i) for i in target_index_list
-        )
-        target_index: int = int(target_index_string, 2)
-        assert results[target_index] == pytest.approx(
-            1 / 2**address_register_size
-        )
 
 
 @pytest.mark.parametrize(
@@ -204,3 +129,38 @@ def test_train_qcpg_circuit(test_sequences: list[str]) -> None:
     )
     assert parameters.shape == trained_parameters.shape
     assert len(loss_history) == iterations
+
+
+@pytest.mark.parametrize(
+    ("sequence", "layer_quantity", "output_quantity"),
+    [
+        ("A", 1, 1),
+        ("AT", 1, 1),
+        ("ATC", 1, 1),
+        ("C", 2, 1),
+        ("G", 1, 2),
+        ("ATCGATCG", 2, 2),
+    ],
+)
+def test_train_one_epoch(
+    sequence: str, layer_quantity: int, output_quantity: int
+) -> None:
+    batch_size: int = 2
+    model = qcpg_models.QNN(len(sequence), layer_quantity, output_quantity)
+    with (
+        mock.patch("qenetics.tools.cpg_sampler.H5CpGDataset"),
+        mock.patch(
+            "qenetics.tools.cpg_sampler.H5CpGDataset.__getitem__"
+        ) as mock_get,
+    ):
+        mock_get.return_value = [
+            tensor(cpg_sampler.nucleotide_string_to_numpy(sequence))
+        ] * batch_size
+        loss: float = qcpg._train_one_epoch(
+            model,
+            1,
+            cpg_sampler.H5CpGDataset([]),
+            optim.SGD(model.parameters(), lr=0.01),
+            nn.CrossEntropyLoss(),
+            report_every=1,
+        )

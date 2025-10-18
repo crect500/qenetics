@@ -14,7 +14,8 @@ dependencies=[
     "keras",
     "numpy",
     "optax",
-    "pennylane"
+    "pennylane",
+    "torch"
 ]
 
 

@@ -1,195 +1,41 @@
-from enum import IntEnum
+from dataclasses import dataclass, field
 import logging
-from math import ceil, log2
 from pathlib import Path
-from typing import Iterable
 
 import jax
+import torch
 from jax import numpy as jnp
 import numpy as np
 from numpy.typing import NDArray
 import optax
 import pennylane as qml
+from torch import nn, optim, Tensor
+from torch.utils.data import DataLoader
 
 from qenetics.qcpg import qcpg_models
-from qenetics.tools import metrics
+from qenetics.tools import cpg_sampler, metrics
 
 logger = logging.getLogger(__name__)
 
 
-class Nucleodtide(IntEnum):
-    """
-    Maps nucleotide abbreviations to enum.
-
-    A - 0
-    T - 1
-    C - 2
-    G - 3
-    """
-
-    A = 0
-    T = 1
-    C = 2
-    G = 3
-
-
-def convert_nucleotide_to_enum(nucleotide: str) -> Nucleodtide:
-    """
-    Convert nucleotide abbreviation to corresponding enum.
-
-    A - 0, T - 1, C - 2, G - 3
-
-    Args
-    ----
-    nucleotide: The ASCII representation of the nucleotide abbreviation.
-
-    Returns
-    -------
-    The corresponding nucleotide enum.
-
-    """
-    if nucleotide == "A":
-        return Nucleodtide.A
-    if nucleotide == "T":
-        return Nucleodtide.T
-    if nucleotide == "C":
-        return Nucleodtide.C
-    if nucleotide == "G":
-        return Nucleodtide.G
-
-    raise ValueError(
-        f"Chracter {nucleotide} not recognized as valid nucleotide"
+@dataclass
+class TrainingParameters:
+    data_directory: Path
+    output_filepath: Path
+    training_chromosomes: list[str] = field(
+        default_factory=lambda: [1, 3, 5, 7, 9, 11]
     )
-
-
-def string_to_nucleotides(nucleotide_string: str) -> list[Nucleodtide]:
-    """
-    Convert a string to nucleotide enumerations.
-
-    Args
-    ----
-    nucleotide_string: A string of characters in the set A, T, C, G.
-
-    Returns
-    -------
-    A list of nucleotide enumerations.
-    """
-    return [
-        convert_nucleotide_to_enum(character) for character in nucleotide_string
-    ]
-
-
-def calculate_address_register_size(values_to_encode: int) -> int:
-    """
-    Determine the address register size for the quantum circuit.
-
-    Args
-    ----
-    values_to_encode: The number of values that the quantum circuit will encode.
-
-    Returns
-    -------
-    The minimum quantum address register qubits required to encode all values.
-
-    Raises
-    ------
-    ValueError if values_to_encode is less than 1.
-    """
-    if values_to_encode < 1:
-        raise ValueError(f"Value {values_to_encode} must be greater than 0.")
-
-    if values_to_encode == 1:
-        return 1
-
-    return int(ceil(log2(values_to_encode)))
-
-
-def single_encode_nucleotide(
-    nucleotide: Nucleodtide, index: int, address_register_size: int
-) -> None:
-    """
-    One-hot encode nucleotide value into a quantum circuit at the appropriate address.
-
-    Args
-    ----
-    nucleotide: An enumerated value corresponding to a type of nucleotide.
-    index: The location of the nucleotide in the sequence.
-    address_register_size: The size of the quantum address register.
-    """
-    controls: list[int] = [int(value) for value in bin(index).split("b")[1]]
-    if len(controls) != address_register_size:
-        controls = [0] * (address_register_size - len(controls)) + controls
-    qml.MultiControlledX(
-        wires=list(range(address_register_size))
-        + [address_register_size + nucleotide.value],
-        control_values=controls,
+    validation_chromosomes: list[str] = field(
+        default_factory=lambda: [2, 4, 6, 8, 10, 12]
     )
-
-
-def single_encode_all_nucleotides(nucleotides: Iterable[Nucleodtide]) -> None:
-    """
-    One-hot encode nucleotide values into a quantum circuit at appropriate addresses.
-
-    Args
-    ----
-    nucleotides: A sequence of enum-mapped nucleotide values.
-    """
-    address_register_size: int = calculate_address_register_size(
-        len(nucleotides)
-    )
-    for index, nucleotide in enumerate(nucleotides):
-        single_encode_nucleotide(nucleotide, index, address_register_size)
-
-
-def amplitude_encode_nucleotide(
-    nucleotide: Nucleodtide, index: int, address_register_size: int
-) -> None:
-    """
-    Amplitude-encode nucleotide value into a quantum circuit at the appropriate index.
-
-    Args
-    ----
-    nucleotide:
-    nucleotide: An enumerated value corresponding to a type of nucleotide.
-    index: The location of the nucleotide in the sequence.
-    address_register_size: The size of the quantum address register.
-    """
-    controls: list[int] = [int(value) for value in bin(index).split("b")[1]]
-    if len(controls) != address_register_size:
-        controls = [0] * (address_register_size - len(controls)) + controls
-    if nucleotide == Nucleodtide.T or nucleotide == Nucleodtide.G:
-        qml.MultiControlledX(
-            wires=list(range(address_register_size))
-            + [address_register_size + 1],
-            control_values=controls,
-        )
-    if nucleotide == Nucleodtide.C or nucleotide == Nucleodtide.G:
-        qml.MultiControlledX(
-            wires=list(range(address_register_size)) + [address_register_size],
-            control_values=controls,
-        )
-
-
-def amplitude_encode_all_nucleotides(
-    nucleotides: Iterable[Nucleodtide],
-) -> None:
-    """
-    Amplitude encode nucleotide values into a quantum circuit at appropriate addresses.
-
-    Args
-    ----
-    nucleotides: A sequence of enum-mapped nucleotide values.
-    """
-    address_register_size: int = calculate_address_register_size(
-        len(nucleotides)
-    )
-    for index, nucleotide in enumerate(nucleotides):
-        amplitude_encode_nucleotide(nucleotide, index, address_register_size)
+    layer_quantity: int = 1
+    epochs: int = 100
+    learning_rate: float = 0.0001
 
 
 def _strongly_entangled_run_circuit(
     parameters: NDArray[float],
-    sequence: list[Nucleodtide],
+    sequence: list[cpg_sampler.Nucleotide],
 ) -> float:
     """
     Run a qcpg circuit with a StronglyEntangled ansatz as the underlying model.
@@ -206,16 +52,18 @@ def _strongly_entangled_run_circuit(
     """
     logging.debug(f"Training on sequence {str(sequence)}")
     data_register_size: int = 4
-    address_register_size: int = calculate_address_register_size(len(sequence))
+    address_register_size: int = qcpg_models.calculate_address_register_size(
+        len(sequence)
+    )
     circuit_width: int = address_register_size + data_register_size
     device = qml.device("default.qubit", wires=circuit_width)
 
     @qml.qnode(device)
     def _run_circuit(
-        sequence: list[Nucleodtide],
+        sequence: list[cpg_sampler.Nucleotide],
         circuit_parameters: NDArray[float],
     ):
-        single_encode_all_nucleotides(sequence)
+        qcpg_models.single_encode_all_nucleotides(sequence)
         qcpg_models.strongly_entangled_jax(circuit_parameters)
 
         return qml.expval(
@@ -228,7 +76,7 @@ def _strongly_entangled_run_circuit(
 
 def _strongly_entangled_run_calculate_loss(
     parameters: NDArray[float],
-    sequences: list[list[Nucleodtide]],
+    sequences: list[list[cpg_sampler.Nucleotide]],
     methylations: NDArray[int],
 ) -> jax.Array:
     """
@@ -265,7 +113,7 @@ def _strongly_entangled_run_calculate_loss(
 
 def _strongly_entangled_run_update_parameters(
     parameters: NDArray[float],
-    sequences: list[list[Nucleodtide]],
+    sequences: list[list[cpg_sampler.Nucleotide]],
     methylations: NDArray[int],
     optimizer: optax.GradientTransformationExtraArgs,
     optimizer_state: optax.GradientTransformationExtraArgs,
@@ -296,7 +144,7 @@ def _strongly_entangled_run_update_parameters(
 
 def _evaluate_test_performance(
     parameters: NDArray[float],
-    test_sequences: list[list[Nucleodtide]],
+    test_sequences: list[list[cpg_sampler.Nucleotide]],
     test_methylations: NDArray[int],
     threshold: float = 0.5,
 ) -> metrics.Metrics:
@@ -333,9 +181,9 @@ def _evaluate_test_performance(
 
 def train_strongly_entangled_qcpg_circuit(
     parameters: NDArray[float],
-    training_sequences: list[list[Nucleodtide]],
+    training_sequences: list[list[cpg_sampler.Nucleotide]],
     training_methylations: NDArray[int],
-    test_sequences: list[list[Nucleodtide]],
+    test_sequences: list[list[cpg_sampler.Nucleotide]],
     test_methylations: NDArray[int],
     output_file: Path,
     max_steps: int = 50,
@@ -385,3 +233,107 @@ def train_strongly_entangled_qcpg_circuit(
             metrics_history.append(result_metrics)
 
     return parameters, loss_history, metrics_history
+
+
+def _train_one_epoch(
+    model: nn.Module,
+    epoch: int,
+    training_loader: cpg_sampler.H5CpGDataset,
+    optimizer: optim.Optimizer,
+    loss_function: nn.CrossEntropyLoss,
+    report_every: int = 100,
+) -> float:
+    accumulated_loss: float = 0.0
+    return_loss: float = 0.0
+    model.train(True)
+
+    for batch_index, batch_data in enumerate(training_loader):
+        inputs, labels = batch_data
+        print(inputs)
+        print(labels)
+        optimizer.zero_grad()
+        outputs: Tensor = model(inputs)
+        loss: Tensor = loss_function(outputs, labels)
+        loss.backward()
+        optimizer.step()
+        accumulated_loss += loss.item()
+        if batch_index % report_every == 0:
+            return_loss = accumulated_loss / report_every
+            logger.info(
+                f"Epoch {epoch} - Batch {batch_index} loss: {return_loss}"
+            )
+            accumulated_loss = 0.0
+
+    return return_loss
+
+
+def _evaluate_validation_set(
+    model: nn.Module,
+    validation_loader: DataLoader,
+    loss_function: nn.CrossEntropyLoss,
+) -> float:
+    accumulated_loss: float = 0.0
+    model.eval()
+    with torch.no_grad():
+        for batch_index, validation_data in enumerate(validation_loader):
+            inputs, labels = validation_data
+            outputs: Tensor = model(inputs)
+            accumulated_loss += loss_function(outputs, labels)
+
+    return accumulated_loss / (batch_index + 1)
+
+
+def _train_all_epochs(
+    model: nn.Module,
+    training_loader: DataLoader,
+    validation_loader: DataLoader,
+    optimizer: optim.Optimizer,
+    loss_function: nn.CrossEntropyLoss,
+    output_filepath: Path,
+    epochs: int = 100,
+) -> None:
+    for epoch in range(epochs):
+        logger.info(f"Training epoch {epoch}")
+        average_training_loss: float = _train_one_epoch(
+            model, epoch, training_loader, optimizer, loss_function
+        )
+        average_validation_loss: float = _evaluate_validation_set(
+            model, validation_loader, loss_function
+        )
+        logger.info(
+            f"Epoch {epoch} loss - Training: {average_training_loss}, Validation: {average_validation_loss}"
+        )
+        torch.save(model.state_dict(), output_filepath)
+
+
+def train_qnn_circuit(training_parameters: TrainingParameters) -> None:
+    training_loader = cpg_sampler.H5CpGDataset(
+        [
+            training_parameters.data_directory / f"chr{chromosome}.h5"
+            for chromosome in training_parameters.training_chromosomes
+        ]
+    )
+    validation_loader = cpg_sampler.H5CpGDataset(
+        [
+            training_parameters.data_directory / f"chr{chromosome}.h5"
+            for chromosome in training_parameters.validation_chromosomes
+        ]
+    )
+    sequence_length: int = training_loader.data.shape[1]
+    output_shape: int = len(training_loader.experiment_names)
+    model = qcpg_models.QNN(
+        sequence_length, training_parameters.layer_quantity, output_shape
+    )
+    optimizer = optim.SGD(
+        model.parameters(), lr=training_parameters.learning_rate
+    )
+    loss_function = nn.CrossEntropyLoss()
+    _train_all_epochs(
+        model=model,
+        training_loader=training_loader,
+        validation_loader=validation_loader,
+        optimizer=optimizer,
+        loss_function=loss_function,
+        output_filepath=training_parameters.output_filepath,
+        epochs=training_parameters.epochs,
+    )

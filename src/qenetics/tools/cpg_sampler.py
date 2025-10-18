@@ -11,10 +11,12 @@ from typing import Any, Generator
 import h5py
 import numpy as np
 from numpy.typing import NDArray
-
-from qenetics.qcpg.qcpg import string_to_nucleotides, Nucleodtide
+import torch
+from torch.utils.data import Dataset
 
 logger = logging.getLogger(__name__)
+
+UNIQUE_NUCLEOTIDE_QUANTITY: int = 4
 
 
 class MethylationFormat(IntEnum):
@@ -28,6 +30,151 @@ class TenGenomicsSequenceInfo:
     name: str
     is_chromosome: bool
     length: int
+
+
+class Nucleotide(IntEnum):
+    """
+    Maps nucleotide abbreviations to enum.
+
+    A - 0
+    T - 1
+    C - 2
+    G - 3
+    """
+
+    A = 0
+    T = 1
+    C = 2
+    G = 3
+
+
+@dataclass
+class ChromosomeIndices:
+    start: int
+    end: int
+
+
+class H5CpGDataset(Dataset):
+    def __init__(
+        self: H5CpGDataset, filepaths: list[Path], threshold: float = 0.5
+    ) -> None:
+        self.file_list = filepaths
+        with h5py.File(filepaths[0]) as fd:
+            self.sequence_length = fd["methylation_sequences"].shape[1]
+            self.experiment_names = fd["methylation_ratios"].keys()
+            self.experiment_quantity = len(self.experiment_names)
+
+        self.chromosome_indices = {}
+        self._allocate_tensors(filepaths)
+        self._fill_tensors(filepaths, threshold)
+
+    def __len__(self: H5CpGDataset) -> int:
+        return len(self.data)
+
+    def __getitem__(
+        self: H5CpGDataset, idx
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        return self.data[idx], self.labels[idx]
+
+    def _allocate_tensors(self: H5CpGDataset, filepaths: list[Path]) -> None:
+        sample_quantity: int = 0
+        for filepath in filepaths:
+            with h5py.File(filepath) as fd:
+                new_sample_quantity: int = (
+                    sample_quantity + fd["methylation_sequences"].shape[0]
+                )
+                self.chromosome_indices[filepath.stem[3:]] = ChromosomeIndices(
+                    start=sample_quantity, end=new_sample_quantity
+                )
+                sample_quantity = new_sample_quantity
+
+        self.data = torch.empty(
+            sample_quantity,
+            self.sequence_length,
+            UNIQUE_NUCLEOTIDE_QUANTITY,
+            dtype=torch.float,
+        )
+        self.labels = torch.empty(
+            sample_quantity, self.experiment_quantity, dtype=torch.int
+        )
+
+    def _fill_tensors(
+        self: H5CpGDataset, filepaths: list[Path], threshold: float = 0.5
+    ) -> None:
+        for filepath in filepaths:
+            chromosome: str = filepath.stem[3:]
+            with h5py.File(filepath) as fd:
+                self.data[
+                    self.chromosome_indices[
+                        chromosome
+                    ].start : self.chromosome_indices[chromosome].end,
+                    :,
+                    :,
+                ] = fd["methylation_sequences"]
+                for label_index, experiment_name in enumerate(
+                    fd["methylation_ratios"].keys()
+                ):
+                    self.labels[
+                        self.chromosome_indices[
+                            chromosome
+                        ].start : self.chromosome_indices[chromosome].end,
+                        label_index,
+                    ] = torch.tensor(
+                        0 if methylation_ratio < threshold else 1
+                        for methylation_ratio in fd["methylation_index"][
+                            experiment_name
+                        ]
+                    )
+
+
+def convert_nucleotide_to_enum(nucleotide: str) -> Nucleotide:
+    """
+    Convert nucleotide abbreviation to corresponding enum.
+
+    A - 0, T - 1, C - 2, G - 3
+
+    Args
+    ----
+    nucleotide: The ASCII representation of the nucleotide abbreviation.
+
+    Returns
+    -------
+    The corresponding nucleotide enum.
+
+    Raises
+    ------
+    ValueError if valid character not provided.
+
+    """
+    if nucleotide == "A":
+        return Nucleotide.A
+    if nucleotide == "T":
+        return Nucleotide.T
+    if nucleotide == "C":
+        return Nucleotide.C
+    if nucleotide == "G":
+        return Nucleotide.G
+
+    raise ValueError(
+        f"Character {nucleotide} not recognized as valid nucleotide"
+    )
+
+
+def string_to_nucleotides(nucleotide_string: str) -> list[Nucleotide]:
+    """
+    Convert a string to nucleotide enumerations.
+
+    Args
+    ----
+    nucleotide_string: A string of characters in the set A, T, C, G.
+
+    Returns
+    -------
+    A list of nucleotide enumerations.
+    """
+    return [
+        convert_nucleotide_to_enum(character) for character in nucleotide_string
+    ]
 
 
 @dataclass
@@ -268,7 +415,9 @@ def extract_fasta_metadata(fasta_file: Path) -> dict[str, SequenceInfo]:
             sequence_info.file_position = fd.tell()
             if sequence_info.is_chromosome:
                 annotations[chromosome] = sequence_info
-            newline_quantity = int(sequence_info.length / line_length) + 1
+            newline_quantity = int(sequence_info.length / line_length)
+            if sequence_info.length % line_length != 0.0:
+                newline_quantity += 1
             read_position = (
                 sequence_info.file_position
                 + sequence_info.length
@@ -626,7 +775,7 @@ def find_methylation_sequence(
 
 def load_methylation_samples(
     methylation_file: Path, threshold: float = 0.5, negative_state: int = 0
-) -> tuple[list[list[Nucleodtide]], list[int]]:
+) -> tuple[list[list[Nucleotide]], list[int]]:
     """
     Load all sequences and their associated methylation ratios from a file.
 
@@ -644,7 +793,7 @@ def load_methylation_samples(
         f"Loading methylation data from {methylation_file} with threshold "
         f"{threshold}."
     )
-    sequences: list[list[Nucleodtide]] = []
+    sequences: list[list[Nucleotide]] = []
     methylation_ratios: list[int] = []
     with methylation_file.open() as fd:
         csv_file = DictReader(fd)
@@ -664,7 +813,7 @@ def load_methylation_samples(
     return sequences, methylation_ratios
 
 
-def nucleotide_to_numpy(nucleotide: Nucleodtide) -> NDArray[int]:
+def nucleotide_to_numpy(nucleotide: Nucleotide) -> NDArray[int]:
     """
     Convert a Nucleotide object to a one-hot encoded array.
 
@@ -681,7 +830,7 @@ def nucleotide_to_numpy(nucleotide: Nucleodtide) -> NDArray[int]:
     return one_hot_array
 
 
-def sequence_to_numpy(sequence: list[Nucleodtide]) -> NDArray[int]:
+def sequence_to_numpy(sequence: list[Nucleotide]) -> NDArray[int]:
     """
     Convert a sequence of nucleotides to an array of one-hot encoded arrays.
 
