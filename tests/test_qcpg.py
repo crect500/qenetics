@@ -1,9 +1,9 @@
+from pathlib import Path
 from math import ceil, log2
+from tempfile import TemporaryDirectory
 from unittest import mock
 
-from numpy.typing import NDArray
 import pennylane as qml
-from pennylane import numpy as pnp
 import pytest
 from torch import nn, optim, tensor
 
@@ -11,35 +11,6 @@ from qenetics.qcpg import qcpg, qcpg_models
 from qenetics.tools import cpg_sampler
 
 UNIQUE_NUCLEOTIDE_QUANTITY: int = 4
-
-
-@pytest.mark.parametrize(("nucleotide_character"), ["A", "T", "C", "G", "B"])
-def test_convert_nucleotide_to_enum(nucleotide_character: str) -> None:
-    if nucleotide_character == "A":
-        assert (
-            qcpg.convert_nucleotide_to_enum(nucleotide_character)
-            == qcpg.Nucleodtide.A
-        )
-    elif nucleotide_character == "T":
-        assert (
-            qcpg.convert_nucleotide_to_enum(nucleotide_character)
-            == qcpg.Nucleodtide.T
-        )
-    elif nucleotide_character == "C":
-        assert (
-            qcpg.convert_nucleotide_to_enum(nucleotide_character)
-            == qcpg.Nucleodtide.C
-        )
-    elif nucleotide_character == "G":
-        assert (
-            qcpg.convert_nucleotide_to_enum(nucleotide_character)
-            == qcpg.Nucleodtide.G
-        )
-    else:
-        with pytest.raises(
-            ValueError, match="not recognized as valid nucleotide"
-        ):
-            _ = qcpg.convert_nucleotide_to_enum(nucleotide_character)
 
 
 @pytest.mark.parametrize(
@@ -107,30 +78,6 @@ def test_amplitude_encode_all_nucleotides(sequence_values: list[int]) -> None:
         )
 
 
-def test_train_qcpg_circuit(test_sequences: list[str]) -> None:
-    iterations: int = 5
-    targets: NDArray[int] = pnp.ones(len(test_sequences), dtype=int)
-    samples: list[list[qcpg.Nucleodtide]] = [
-        qcpg.string_to_nucleotides(sequence) for sequence in test_sequences
-    ]
-    address_register_size: int = qcpg.calculate_address_register_size(
-        len(samples)
-    )
-    layer_quantity: int = 2
-    params_shape = qml.StronglyEntanglingLayers.shape(
-        n_layers=layer_quantity,
-        n_wires=address_register_size + UNIQUE_NUCLEOTIDE_QUANTITY,
-    )
-    parameters: NDArray = pnp.random.default_rng().random(size=params_shape)
-    trained_parameters, loss_history = (
-        qcpg.train_strongly_entangled_qcpg_circuit(
-            parameters, samples, targets, iterations
-        )
-    )
-    assert parameters.shape == trained_parameters.shape
-    assert len(loss_history) == iterations
-
-
 @pytest.mark.parametrize(
     ("sequence", "layer_quantity", "output_quantity"),
     [
@@ -163,4 +110,18 @@ def test_train_one_epoch(
             optim.SGD(model.parameters(), lr=0.01),
             nn.CrossEntropyLoss(),
             report_every=1,
+        )
+
+
+def test_train_qnn_circuit(test_dataset_directory: Path) -> None:
+    with TemporaryDirectory() as temp_dir:
+        qcpg.train_qnn_circuit(
+            training_parameters=qcpg.TrainingParameters(
+                data_directory=test_dataset_directory,
+                output_filepath=Path(temp_dir) / "output.dat",
+                training_chromosomes=["1", "2"],
+                validation_chromosomes=["1", "2"],
+                batch_size=2,
+                epochs=2,
+            )
         )

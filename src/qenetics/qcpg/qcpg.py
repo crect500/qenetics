@@ -23,14 +23,15 @@ class TrainingParameters:
     data_directory: Path
     output_filepath: Path
     training_chromosomes: list[str] = field(
-        default_factory=lambda: [1, 3, 5, 7, 9, 11]
+        default_factory=lambda: ["1", "3", "5", "7", "9", "11"]
     )
     validation_chromosomes: list[str] = field(
-        default_factory=lambda: [2, 4, 6, 8, 10, 12]
+        default_factory=lambda: ["2", "4", "6", "8", "10", "12"]
     )
     layer_quantity: int = 1
     epochs: int = 100
     learning_rate: float = 0.0001
+    batch_size: int = 128
 
 
 def _strongly_entangled_run_circuit(
@@ -249,8 +250,6 @@ def _train_one_epoch(
 
     for batch_index, batch_data in enumerate(training_loader):
         inputs, labels = batch_data
-        print(inputs)
-        print(labels)
         optimizer.zero_grad()
         outputs: Tensor = model(inputs)
         loss: Tensor = loss_function(outputs, labels)
@@ -311,10 +310,11 @@ def train_qnn_circuit(training_parameters: TrainingParameters) -> None:
         [
             training_parameters.data_directory / f"chr{chromosome}.h5"
             for chromosome in training_parameters.training_chromosomes
-        ]
+        ],
+        batch_size=training_parameters.batch_size,
     )
 
-    logger.info("Loaded training files:")
+    logger.info("Loading training files:")
     for filepath in training_loader.file_list:
         logger.info(filepath)
 
@@ -322,14 +322,15 @@ def train_qnn_circuit(training_parameters: TrainingParameters) -> None:
         [
             training_parameters.data_directory / f"chr{chromosome}.h5"
             for chromosome in training_parameters.validation_chromosomes
-        ]
+        ],
+        batch_size=training_parameters.batch_size,
     )
-    logger.info("Loaded validation files:")
+    logger.info("Loading validation files:")
     for filepath in validation_loader.file_list:
         logger.info(filepath)
 
     sequence_length: int = training_loader.data.shape[1]
-    output_shape: int = len(training_loader.experiment_names)
+    output_shape: int = training_loader.experiment_quantity
     model = qcpg_models.QNN(
         sequence_length, training_parameters.layer_quantity, output_shape
     )

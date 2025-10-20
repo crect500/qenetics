@@ -21,9 +21,14 @@ class QNN(nn.Module):
         self.qnn = single_basic_entangling_torch(
             sequence_length, quantum_layer_quantity
         )
-        self.linear = nn.Linear(2**sequence_length, output_quantity)
+        wire_quantity: int = (
+            calculate_address_register_size(sequence_length)
+            + cpg_sampler.UNIQUE_NUCLEOTIDE_QUANTITY
+        )
+        self.linear = nn.Linear(2**wire_quantity, output_quantity)
 
     def forward(self: QNN, x: Tensor) -> Tensor:
+        # Must change has_batch_dim in pennylane\qnn\torch.py:forward to True for multi-dimensional inputs
         x = self.qnn(x)
         x = self.linear(x)
         output: Tensor = functional.sigmoid(x)
@@ -177,7 +182,7 @@ def single_basic_entangling_torch(
     @qml.qnode(device)
     def _qnode(inputs: Tensor, weights: Tensor):
         single_encode_all_nucleotides(inputs)
-        qml.BasicEntanglerLayers(weights)
+        qml.BasicEntanglerLayers(weights, wires=range(wire_quantity))
 
         return qml.probs(wires=list(range(wire_quantity)))
 
