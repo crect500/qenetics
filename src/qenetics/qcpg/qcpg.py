@@ -31,7 +31,7 @@ class TrainingParameters:
     layer_quantity: int = 1
     epochs: int = 100
     learning_rate: float = 0.0001
-    batch_size: int = 128
+    batch_size: int = 1
 
 
 def _strongly_entangled_run_circuit(
@@ -332,7 +332,7 @@ def train_qnn_circuit(training_parameters: TrainingParameters) -> None:
         batch_size=training_parameters.batch_size,
     )
     logger.info(
-        f"Loading {len(training_loader.dataset)} samples from validation files:"
+        f"Loading {len(validation_loader.dataset)} samples from validation files:"
     )
     for chromosome in training_parameters.validation_chromosomes:
         logger.info(training_parameters.data_directory / f"chr{chromosome}.h5")
