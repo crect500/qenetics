@@ -110,7 +110,7 @@ class H5CpGDataset(Dataset):
                     ].start : self.chromosome_indices[chromosome].end,
                     :,
                     :,
-                ] = fd["methylation_sequences"]
+                ] = torch.tensor(fd["methylation_sequences"])
                 for label_index, experiment_name in enumerate(
                     fd["methylation_ratios"].keys()
                 ):
@@ -120,10 +120,13 @@ class H5CpGDataset(Dataset):
                         ].start : self.chromosome_indices[chromosome].end,
                         label_index,
                     ] = torch.tensor(
-                        0 if methylation_ratio < threshold else 1
-                        for methylation_ratio in fd["methylation_index"][
-                            experiment_name
-                        ]
+                        [
+                            0 if methylation_ratio < threshold else 1
+                            for methylation_ratio in fd["methylation_ratios"][
+                                experiment_name
+                            ]
+                        ],
+                        dtype=torch.int8,
                     )
 
 

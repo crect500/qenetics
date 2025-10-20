@@ -112,12 +112,14 @@ if __name__ == "__main__":
         logging.basicConfig(
             filename=args.log_directory / "qcpg_train.log", level=logging.INFO
         )
-    qcpg.TrainingParameters(
-        data_directory=args.data_directory,
-        output_filepath=args.output_filepath,
-        training_chromosomes=args.training_chromosomes,
-        validation_chromosomes=args.validation_chromosomes,
-        layer_quantity=args.layer_quantity,
-        epochs=args.max_iterations,
-        learning_rate=args.learning_rate,
+    qcpg.train_qnn_circuit(
+        qcpg.TrainingParameters(
+            data_directory=args.data_directory,
+            output_filepath=args.output_filepath,
+            training_chromosomes=args.training_chromosomes,
+            validation_chromosomes=args.validation_chromosomes,
+            layer_quantity=args.layer_quantity,
+            epochs=args.max_iterations,
+            learning_rate=args.learning_rate,
+        )
     )

@@ -313,12 +313,21 @@ def train_qnn_circuit(training_parameters: TrainingParameters) -> None:
             for chromosome in training_parameters.training_chromosomes
         ]
     )
+
+    logger.info("Loaded training files:")
+    for filepath in training_loader.file_list:
+        logger.info(filepath)
+
     validation_loader = cpg_sampler.H5CpGDataset(
         [
             training_parameters.data_directory / f"chr{chromosome}.h5"
             for chromosome in training_parameters.validation_chromosomes
         ]
     )
+    logger.info("Loaded validation files:")
+    for filepath in validation_loader.file_list:
+        logger.info(filepath)
+
     sequence_length: int = training_loader.data.shape[1]
     output_shape: int = len(training_loader.experiment_names)
     model = qcpg_models.QNN(

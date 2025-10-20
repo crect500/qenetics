@@ -40,3 +40,8 @@ def test_sequences() -> list[str]:
 @pytest.fixture
 def test_input_file() -> Path:
     return Path("tests/test_files/test_input_data.csv")
+
+
+@pytest.fixture
+def test_dataset_directory() -> Path:
+    return Path("tests/test_files/test_dataset")

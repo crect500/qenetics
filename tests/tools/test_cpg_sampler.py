@@ -11,6 +11,21 @@ import pytest
 from qenetics.tools import cpg_sampler
 
 
+def test_H5CpGDataset(test_dataset_directory: Path) -> None:
+    test_files: list[Path] = [
+        test_dataset_directory / f"chr{i}.h5" for i in ["1", "2"]
+    ]
+    dataset = cpg_sampler.H5CpGDataset(test_files)
+    assert dataset.data.shape == (8, 8, 4)
+    assert dataset.data.sum() == 64.0
+    assert dataset.labels.shape == (8, 2)
+    assert dataset.labels.sum() == 8
+    assert len(dataset) == 8
+    data, labels = dataset[0]
+    assert (data == cpg_sampler.nucleotide_string_to_numpy("ATCGATCG")).all()
+    assert list(labels) == [0, 0]
+
+
 @pytest.mark.parametrize(
     ("sequence", "name", "is_chromosome"),
     [
