@@ -59,7 +59,6 @@ class H5CpGDataset(Dataset):
         self: H5CpGDataset,
         filepaths: list[Path],
         threshold: float = 0.5,
-        batch_size: int = 128,
     ) -> None:
         self.file_list = filepaths
         with h5py.File(filepaths[0]) as fd:
@@ -67,7 +66,6 @@ class H5CpGDataset(Dataset):
             self.experiment_names = fd["methylation_ratios"].keys()
             self.experiment_quantity = len(self.experiment_names)
 
-        self.batch_size = batch_size
         self.chromosome_indices = {}
         self._allocate_tensors(filepaths)
         self._fill_tensors(filepaths, threshold)
@@ -78,6 +76,8 @@ class H5CpGDataset(Dataset):
     def __getitem__(
         self: H5CpGDataset, idx
     ) -> tuple[torch.Tensor, torch.Tensor]:
+        if torch.is_tensor(idx):
+            idx = idx.tolist()
         return self.data[idx], self.labels[idx]
 
     def _allocate_tensors(self: H5CpGDataset, filepaths: list[Path]) -> None:

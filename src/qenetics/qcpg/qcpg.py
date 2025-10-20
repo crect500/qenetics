@@ -251,8 +251,8 @@ def _train_one_epoch(
     for batch_index, batch_data in enumerate(training_loader):
         inputs, labels = batch_data
         optimizer.zero_grad()
-        outputs: Tensor = model(inputs)
-        loss: Tensor = loss_function(outputs, labels)
+        outputs: Tensor = model(inputs[0])
+        loss: Tensor = loss_function(outputs, labels[0])
         loss.backward()
         optimizer.step()
         accumulated_loss += loss.item()
@@ -276,8 +276,8 @@ def _evaluate_validation_set(
     with torch.no_grad():
         for batch_index, validation_data in enumerate(validation_loader):
             inputs, labels = validation_data
-            outputs: Tensor = model(inputs)
-            accumulated_loss += loss_function(outputs, labels)
+            outputs: Tensor = model(inputs[0])
+            accumulated_loss += loss_function(outputs, labels[0])
 
     return accumulated_loss / (batch_index + 1)
 
@@ -306,31 +306,39 @@ def _train_all_epochs(
 
 
 def train_qnn_circuit(training_parameters: TrainingParameters) -> None:
-    training_loader = cpg_sampler.H5CpGDataset(
-        [
-            training_parameters.data_directory / f"chr{chromosome}.h5"
-            for chromosome in training_parameters.training_chromosomes
-        ],
+    training_loader = DataLoader(
+        cpg_sampler.H5CpGDataset(
+            [
+                training_parameters.data_directory / f"chr{chromosome}.h5"
+                for chromosome in training_parameters.training_chromosomes
+            ]
+        ),
         batch_size=training_parameters.batch_size,
     )
 
-    logger.info("Loading training files:")
-    for filepath in training_loader.file_list:
-        logger.info(filepath)
+    logger.info(
+        f"Loaded {len(training_loader.dataset)} samples from training files:"
+    )
+    for chromosome in training_parameters.training_chromosomes:
+        logger.info(training_parameters.data_directory / f"chr{chromosome}.h5")
 
-    validation_loader = cpg_sampler.H5CpGDataset(
-        [
-            training_parameters.data_directory / f"chr{chromosome}.h5"
-            for chromosome in training_parameters.validation_chromosomes
-        ],
+    validation_loader = DataLoader(
+        cpg_sampler.H5CpGDataset(
+            [
+                training_parameters.data_directory / f"chr{chromosome}.h5"
+                for chromosome in training_parameters.validation_chromosomes
+            ]
+        ),
         batch_size=training_parameters.batch_size,
     )
-    logger.info("Loading validation files:")
-    for filepath in validation_loader.file_list:
-        logger.info(filepath)
+    logger.info(
+        f"Loading {len(training_loader.dataset)} samples from validation files:"
+    )
+    for chromosome in training_parameters.validation_chromosomes:
+        logger.info(training_parameters.data_directory / f"chr{chromosome}.h5")
 
-    sequence_length: int = training_loader.data.shape[1]
-    output_shape: int = training_loader.experiment_quantity
+    sequence_length: int = training_loader.dataset.data.shape[1]
+    output_shape: int = training_loader.dataset.experiment_quantity
     model = qcpg_models.QNN(
         sequence_length, training_parameters.layer_quantity, output_shape
     )

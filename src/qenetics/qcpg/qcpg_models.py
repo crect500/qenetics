@@ -182,7 +182,7 @@ def single_basic_entangling_torch(
     @qml.qnode(device)
     def _qnode(inputs: Tensor, weights: Tensor):
         single_encode_all_nucleotides(inputs)
-        qml.BasicEntanglerLayers(weights, wires=range(wire_quantity))
+        qml.BasicEntanglerLayers(weights, wires=list(range(wire_quantity)))
 
         return qml.probs(wires=list(range(wire_quantity)))
 

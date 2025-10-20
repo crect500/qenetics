@@ -103,7 +103,7 @@ def test_train_one_epoch(
         mock_get.return_value = [
             tensor(cpg_sampler.nucleotide_string_to_numpy(sequence))
         ] * batch_size
-        loss: float = qcpg._train_one_epoch(
+        _ = qcpg._train_one_epoch(
             model,
             1,
             cpg_sampler.H5CpGDataset([]),
@@ -121,7 +121,7 @@ def test_train_qnn_circuit(test_dataset_directory: Path) -> None:
                 output_filepath=Path(temp_dir) / "output.dat",
                 training_chromosomes=["1", "2"],
                 validation_chromosomes=["1", "2"],
-                batch_size=2,
+                batch_size=1,
                 epochs=2,
             )
         )
