@@ -28,6 +28,7 @@ class TrainingParameters:
     validation_chromosomes: list[str] = field(
         default_factory=lambda: ["2", "4", "6", "8", "10", "12"]
     )
+    entangler: str = "basic"
     layer_quantity: int = 1
     epochs: int = 100
     learning_rate: float = 0.0001
@@ -340,7 +341,10 @@ def train_qnn_circuit(training_parameters: TrainingParameters) -> None:
     sequence_length: int = training_loader.dataset.data.shape[1]
     output_shape: int = training_loader.dataset.experiment_quantity
     model = qcpg_models.QNN(
-        sequence_length, training_parameters.layer_quantity, output_shape
+        sequence_length,
+        training_parameters.layer_quantity,
+        output_shape,
+        entangler=training_parameters.entangler,
     )
     optimizer = optim.SGD(
         model.parameters(), lr=training_parameters.learning_rate

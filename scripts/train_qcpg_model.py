@@ -44,6 +44,15 @@ def _parse_script_args() -> Namespace:
         help="Specify the chromosomes to use as validation data.",
     )
     parser.add_argument(
+        "-e",
+        "--entangler",
+        dest="entangler",
+        required=False,
+        type=str,
+        default="basic",
+        help="'basic' for BasicEntanglerLayers, 'strong' for StronglyEntanglingLayers.",
+    )
+    parser.add_argument(
         "--max-iterations",
         dest="max_iterations",
         required=False,
@@ -118,6 +127,7 @@ if __name__ == "__main__":
             output_filepath=args.output_filepath,
             training_chromosomes=args.training_chromosomes,
             validation_chromosomes=args.validation_chromosomes,
+            entangler=args.entangler,
             layer_quantity=args.layer_quantity,
             epochs=args.max_iterations,
             learning_rate=args.learning_rate,

@@ -15,12 +15,23 @@ class QNN(nn.Module):
         sequence_length: int,
         quantum_layer_quantity: int,
         output_quantity: int,
+        entangler: str = "basic",
     ) -> None:
         super(QNN, self).__init__()
 
-        self.qnn = single_basic_entangling_torch(
-            sequence_length, quantum_layer_quantity
-        )
+        if entangler == "basic":
+            self.qnn = single_basic_entangling_torch(
+                sequence_length, quantum_layer_quantity
+            )
+        elif entangler == "strong":
+            self.qnn = strongly_entangled_torch(
+                sequence_length, quantum_layer_quantity
+            )
+        else:
+            raise ValueError(
+                f"Entangler specified not recognized: {entangler}."
+            )
+
         wire_quantity: int = (
             calculate_address_register_size(sequence_length)
             + cpg_sampler.UNIQUE_NUCLEOTIDE_QUANTITY
@@ -176,8 +187,6 @@ def single_basic_entangling_torch(
         + cpg_sampler.UNIQUE_NUCLEOTIDE_QUANTITY
     )
     device = qml.device("default.qubit", wires=wire_quantity)
-    circuit_parameters: Tensor = empty(quantum_layer_quantity, wire_quantity)
-    nn.init.normal_(circuit_parameters)
 
     @qml.qnode(device)
     def _qnode(inputs: Tensor, weights: Tensor):
@@ -188,4 +197,34 @@ def single_basic_entangling_torch(
 
     return qml.qnn.TorchLayer(
         _qnode, {"weights": (quantum_layer_quantity, wire_quantity)}
+    )
+
+
+def strongly_entangled_torch(
+    sequence_length: int, quantum_layer_quantity: int
+) -> qml.qnn.TorchLayer:
+    wire_quantity: int = (
+        calculate_address_register_size(sequence_length)
+        + cpg_sampler.UNIQUE_NUCLEOTIDE_QUANTITY
+    )
+    device = qml.device("default.qubit", wires=wire_quantity)
+    rotations_quantity: int = 3
+
+    @qml.qnode(device)
+    def _qnode(inputs: Tensor, weights: Tensor):
+        single_encode_all_nucleotides(inputs)
+        qml.StronglyEntanglingLayers(
+            weights,
+            wires=list(range(wire_quantity)),
+        )
+
+        return qml.probs(wires=list(range(wire_quantity)))
+
+    return qml.qnn.TorchLayer(
+        _qnode,
+        {
+            "weights": qml.StronglyEntanglingLayers.shape(
+                n_layers=quantum_layer_quantity, n_wires=wire_quantity
+            )
+        },
     )
