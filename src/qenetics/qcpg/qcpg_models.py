@@ -3,7 +3,7 @@ from __future__ import annotations
 from math import ceil, log2
 
 import pennylane as qml
-from torch import empty, nn, Tensor
+from torch import nn, Tensor
 from torch.nn import functional
 
 from qenetics.tools import cpg_sampler
@@ -208,7 +208,6 @@ def strongly_entangled_torch(
         + cpg_sampler.UNIQUE_NUCLEOTIDE_QUANTITY
     )
     device = qml.device("default.qubit", wires=wire_quantity)
-    rotations_quantity: int = 3
 
     @qml.qnode(device)
     def _qnode(inputs: Tensor, weights: Tensor):

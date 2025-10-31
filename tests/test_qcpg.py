@@ -1,9 +1,7 @@
 from pathlib import Path
-from math import ceil, log2
 from tempfile import TemporaryDirectory
 from unittest import mock
 
-import pennylane as qml
 import pytest
 from torch import nn, optim, tensor
 

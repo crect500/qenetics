@@ -9,6 +9,7 @@ import numpy as np
 from numpy.typing import NDArray
 import optax
 import pennylane as qml
+from sklearn.metrics import auc, roc_curve
 from torch import nn, optim, Tensor
 from torch.utils.data import DataLoader
 
@@ -271,16 +272,23 @@ def _evaluate_validation_set(
     model: nn.Module,
     validation_loader: DataLoader,
     loss_function: nn.CrossEntropyLoss,
-) -> float:
+) -> tuple[float, float]:
     accumulated_loss: float = 0.0
+    accumulated_auc: float = 0.0
     model.eval()
     with torch.no_grad():
         for batch_index, validation_data in enumerate(validation_loader):
             inputs, labels = validation_data
             outputs: Tensor = model(inputs[0])
+            true_positive_rate, false_positive_rate, _ = roc_curve(
+                labels[0], outputs
+            )
+            accumulated_auc += auc(false_positive_rate, true_positive_rate)
             accumulated_loss += loss_function(outputs, labels[0])
 
-    return accumulated_loss / (batch_index + 1)
+    return accumulated_loss / (batch_index + 1), accumulated_auc / (
+        batch_index + 1
+    )
 
 
 def _train_all_epochs(
@@ -297,11 +305,12 @@ def _train_all_epochs(
         average_training_loss: float = _train_one_epoch(
             model, epoch, training_loader, optimizer, loss_function
         )
-        average_validation_loss: float = _evaluate_validation_set(
+        average_validation_loss, average_auc = _evaluate_validation_set(
             model, validation_loader, loss_function
         )
         logger.info(
-            f"Epoch {epoch} loss - Training: {average_training_loss}, Validation: {average_validation_loss}"
+            f"Epoch {epoch} Training loss: {average_training_loss}, Validation loss: "
+            f"{average_validation_loss}, Validation AUC: {average_auc}"
         )
         torch.save(model.state_dict(), output_filepath)
 
@@ -337,6 +346,12 @@ def train_qnn_circuit(training_parameters: TrainingParameters) -> None:
     )
     for chromosome in training_parameters.validation_chromosomes:
         logger.info(training_parameters.data_directory / f"chr{chromosome}.h5")
+
+    logger.info("Using the following training parameters:")
+    logger.info(f"\tEntangler: {training_parameters.entangler}")
+    logger.info(f"\tLayer quantity: {training_parameters.layer_quantity}")
+    logger.info(f"\tLearning rate: {training_parameters.learning_rate}")
+    logger.info(f"\tEpochs: {training_parameters.epochs}")
 
     sequence_length: int = training_loader.dataset.data.shape[1]
     output_shape: int = training_loader.dataset.experiment_quantity
