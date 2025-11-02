@@ -41,6 +41,10 @@ def test_train_one_epoch(
     test_h5_loader: cpg_sampler.H5CpGDataset,
 ) -> None:
     model = qcpg_models.QNN(len(sequence), layer_quantity, output_quantity)
+    training_parameters = qcpg.TrainingParameters(
+        data_directory=Path("."),
+        output_filepath=Path("."),
+    )
     with (
         mock.patch(
             "qenetics.tools.cpg_sampler.H5CpGDataset.__getitem__"
@@ -62,7 +66,7 @@ def test_train_one_epoch(
             1,
             test_h5_loader,
             optim.SGD(model.parameters(), lr=0.01),
-            report_every=1,
+            training_parameters,
         )
 
 
@@ -71,6 +75,12 @@ def test_train_one_epoch_with_nans(test_h5_loader) -> None:
     layer_quantity: int = 1
     output_quantity: int = 2
     model = qcpg_models.QNN(sequence_length, layer_quantity, output_quantity)
+    training_parameters = qcpg.TrainingParameters(
+        data_directory=Path("."),
+        output_filepath=Path("."),
+        l1_regularizer=0.1,
+        l2_regularizer=0.1,
+    )
     with (
         mock.patch(
             "qenetics.tools.cpg_sampler.H5CpGDataset.__getitem__"
@@ -87,7 +97,7 @@ def test_train_one_epoch_with_nans(test_h5_loader) -> None:
             1,
             test_h5_loader,
             optim.SGD(model.parameters(), lr=0.01),
-            report_every=1,
+            training_parameters,
         )
 
 
@@ -98,6 +108,10 @@ def test_evaluate_validation_set(
     layer_quantity: int = 1
     output_quantity: int = 2
     model = qcpg_models.QNN(sequence_length, layer_quantity, output_quantity)
+    training_parameters = qcpg.TrainingParameters(
+        data_directory=Path("."),
+        output_filepath=Path("."),
+    )
     with (
         mock.patch(
             "qenetics.tools.cpg_sampler.H5CpGDataset.__getitem__"
@@ -113,7 +127,9 @@ def test_evaluate_validation_set(
                 [tensor([1.0, nan], dtype=torch.float)],
             ),
         ]
-        qcpg._evaluate_validation_set(model, test_h5_loader)
+        qcpg._evaluate_validation_set(
+            model, test_h5_loader, training_parameters
+        )
 
 
 def test_train_qnn_circuit(test_dataset_directory: Path) -> None:

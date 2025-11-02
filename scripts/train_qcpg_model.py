@@ -44,6 +44,14 @@ def _parse_script_args() -> Namespace:
         help="Specify the chromosomes to use as validation data.",
     )
     parser.add_argument(
+        "--model-filepath",
+        dest="model_filepath",
+        required=False,
+        type=Path,
+        default=None,
+        help="Load an existing model instead of creating a new model.",
+    )
+    parser.add_argument(
         "-e",
         "--entangler",
         dest="entangler",
@@ -96,12 +104,20 @@ def _parse_script_args() -> Namespace:
         help="The learning rate for the optimizer.",
     )
     parser.add_argument(
-        "--seed",
-        dest="seed",
+        "-l1",
+        dest="l1_regularization",
         required=False,
-        type=int,
-        default=1,
-        help="The seed for the sample generator.",
+        type=float,
+        default=0.0,
+        help="The L1 (LASSO) regularization lambda value.",
+    )
+    parser.add_argument(
+        "-l2",
+        dest="l2_regularization",
+        required=False,
+        type=float,
+        default=0.0,
+        help="The L2 (Ridge) regularization lambda value.",
     )
     parser.add_argument(
         "--log-directory",
@@ -131,5 +147,8 @@ if __name__ == "__main__":
             layer_quantity=args.layer_quantity,
             epochs=args.max_iterations,
             learning_rate=args.learning_rate,
+            l1_regularizer=args.l1_regularization,
+            l2_regularizer=args.l2_regularization,
+            model_filepath=args.model_filepath,
         )
     )

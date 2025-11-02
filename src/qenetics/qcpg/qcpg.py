@@ -37,6 +37,7 @@ class TrainingParameters:
     l1_regularizer: float = 0.0
     l2_regularizer: float = 0.0
     batch_size: int = 1
+    report_every: int = 1000
     model_filepath: Path | None = None
 
 
@@ -256,7 +257,7 @@ def _train_one_epoch(
     epoch: int,
     training_loader: DataLoader,
     optimizer: optim.Optimizer,
-    report_every: int = 100,
+    training_parameters: TrainingParameters,
 ) -> float:
     accumulated_loss: float = 0.0
     return_loss: float = 0.0
@@ -270,11 +271,26 @@ def _train_one_epoch(
         loss: Tensor = nn.functional.binary_cross_entropy(
             outputs[non_nan_indices], labels[0][non_nan_indices]
         )
+        if training_parameters.l1_regularizer != 0.0:
+            loss += training_parameters.l1_regularizer * sum(
+                parameter_vector.abs().sum()
+                for parameter_vector in model.parameters()
+            )
+
+        if training_parameters.l2_regularizer != 0.0:
+            loss += training_parameters.l2_regularizer * sum(
+                parameter_vector.pow(2).sum()
+                for parameter_vector in model.parameters()
+            )
+
         loss.backward()
         optimizer.step()
         accumulated_loss += loss.item()
-        if batch_index % report_every == 0 and batch_index != 0:
-            return_loss = accumulated_loss / report_every
+        if (
+            batch_index % training_parameters.report_every == 0
+            and batch_index != 0
+        ):
+            return_loss = accumulated_loss / training_parameters.report_every
             logger.info(
                 f"Epoch {epoch} - Batch {batch_index} loss: {return_loss}"
             )
@@ -286,6 +302,7 @@ def _train_one_epoch(
 def _evaluate_validation_set(
     model: nn.Module,
     validation_loader: DataLoader,
+    training_parameters: TrainingParameters,
 ) -> tuple[float, float]:
     accumulated_loss: float = 0.0
     accumulated_auc: float = 0.0
@@ -305,9 +322,22 @@ def _evaluate_validation_set(
                 invalid_auc_count += 0
             else:
                 accumulated_auc += auc(false_positive_rate, true_positive_rate)
+
             loss: Tensor = nn.functional.binary_cross_entropy(
                 outputs[non_nan_indices], labels[0][non_nan_indices]
             )
+            if training_parameters.l1_regularizer != 0.0:
+                loss += training_parameters.l1_regularizer * sum(
+                    parameter_vector.abs().sum()
+                    for parameter_vector in model.parameters()
+                )
+
+            if training_parameters.l2_regularizer != 0.0:
+                loss += training_parameters.l2_regularizer * sum(
+                    parameter_vector.pow(2).sum()
+                    for parameter_vector in model.parameters()
+                )
+
             accumulated_loss += loss
 
     return accumulated_loss / (
@@ -321,15 +351,15 @@ def _train_all_epochs(
     validation_loader: DataLoader,
     optimizer: optim.Optimizer,
     output_filepath: Path,
-    epochs: int = 100,
+    training_parameters: TrainingParameters,
 ) -> None:
-    for epoch in range(epochs):
+    for epoch in range(training_parameters.epochs):
         logger.info(f"Training epoch {epoch}")
         average_training_loss: float = _train_one_epoch(
-            model, epoch, training_loader, optimizer
+            model, epoch, training_loader, optimizer, training_parameters
         )
         average_validation_loss, average_auc = _evaluate_validation_set(
-            model, validation_loader
+            model, validation_loader, training_parameters
         )
         logger.info(
             f"Epoch {epoch} Training loss: {average_training_loss}, Validation loss: "
@@ -396,5 +426,5 @@ def train_qnn_circuit(training_parameters: TrainingParameters) -> None:
         validation_loader=validation_loader,
         optimizer=optimizer,
         output_filepath=training_parameters.output_filepath,
-        epochs=training_parameters.epochs,
+        training_parameters=training_parameters,
     )
