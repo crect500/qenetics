@@ -405,6 +405,8 @@ def train_qnn_circuit(training_parameters: TrainingParameters) -> None:
     logger.info(f"\tLayer quantity: {training_parameters.layer_quantity}")
     logger.info(f"\tLearning rate: {training_parameters.learning_rate}")
     logger.info(f"\tEpochs: {training_parameters.epochs}")
+    logger.info(f"\tL1 regularization: {training_parameters.l1_regularizer}")
+    logger.info(f"\tL2 regularization: {training_parameters.l2_regularizer}")
 
     sequence_length: int = training_loader.dataset.data.shape[1]
     output_shape: int = training_loader.dataset.experiment_quantity
