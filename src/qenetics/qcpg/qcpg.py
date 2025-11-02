@@ -33,7 +33,10 @@ class TrainingParameters:
     layer_quantity: int = 1
     epochs: int = 100
     learning_rate: float = 0.0001
+    l1_regularizer: float = 0.0
+    l2_regularizer: float = 0.0
     batch_size: int = 1
+    model_filepath: Path | None = None
 
 
 def _strongly_entangled_run_circuit(
@@ -238,12 +241,20 @@ def train_strongly_entangled_qcpg_circuit(
     return parameters, loss_history, metrics_history
 
 
+def _non_nan_indices(truth: Tensor) -> list[int]:
+    indices: list[int] = []
+    for index, truth_value in enumerate(truth):
+        if not truth_value.isnan():
+            indices.append(index)
+
+    return indices
+
+
 def _train_one_epoch(
     model: nn.Module,
     epoch: int,
-    training_loader: cpg_sampler.H5CpGDataset,
+    training_loader: DataLoader,
     optimizer: optim.Optimizer,
-    loss_function: nn.CrossEntropyLoss,
     report_every: int = 100,
 ) -> float:
     accumulated_loss: float = 0.0
@@ -254,11 +265,14 @@ def _train_one_epoch(
         inputs, labels = batch_data
         optimizer.zero_grad()
         outputs: Tensor = model(inputs[0])
-        loss: Tensor = loss_function(outputs, labels[0])
+        non_nan_indices = _non_nan_indices(labels[0])
+        loss: Tensor = nn.functional.binary_cross_entropy(
+            outputs[non_nan_indices], labels[0][non_nan_indices]
+        )
         loss.backward()
         optimizer.step()
         accumulated_loss += loss.item()
-        if batch_index % report_every == 0:
+        if batch_index % report_every == 0 and batch_index != 0:
             return_loss = accumulated_loss / report_every
             logger.info(
                 f"Epoch {epoch} - Batch {batch_index} loss: {return_loss}"
@@ -271,7 +285,6 @@ def _train_one_epoch(
 def _evaluate_validation_set(
     model: nn.Module,
     validation_loader: DataLoader,
-    loss_function: nn.CrossEntropyLoss,
 ) -> tuple[float, float]:
     accumulated_loss: float = 0.0
     accumulated_auc: float = 0.0
@@ -280,11 +293,16 @@ def _evaluate_validation_set(
         for batch_index, validation_data in enumerate(validation_loader):
             inputs, labels = validation_data
             outputs: Tensor = model(inputs[0])
+
+            non_nan_indices = _non_nan_indices(labels[0])
             true_positive_rate, false_positive_rate, _ = roc_curve(
-                labels[0], outputs
+                labels[0][non_nan_indices], outputs[non_nan_indices]
             )
             accumulated_auc += auc(false_positive_rate, true_positive_rate)
-            accumulated_loss += loss_function(outputs, labels[0])
+            loss: Tensor = nn.functional.binary_cross_entropy(
+                outputs[non_nan_indices], labels[0][non_nan_indices]
+            )
+            accumulated_loss += loss
 
     return accumulated_loss / (batch_index + 1), accumulated_auc / (
         batch_index + 1
@@ -296,17 +314,16 @@ def _train_all_epochs(
     training_loader: DataLoader,
     validation_loader: DataLoader,
     optimizer: optim.Optimizer,
-    loss_function: nn.CrossEntropyLoss,
     output_filepath: Path,
     epochs: int = 100,
 ) -> None:
     for epoch in range(epochs):
         logger.info(f"Training epoch {epoch}")
         average_training_loss: float = _train_one_epoch(
-            model, epoch, training_loader, optimizer, loss_function
+            model, epoch, training_loader, optimizer
         )
         average_validation_loss, average_auc = _evaluate_validation_set(
-            model, validation_loader, loss_function
+            model, validation_loader
         )
         logger.info(
             f"Epoch {epoch} Training loss: {average_training_loss}, Validation loss: "
@@ -361,16 +378,17 @@ def train_qnn_circuit(training_parameters: TrainingParameters) -> None:
         output_shape,
         entangler=training_parameters.entangler,
     )
+    if training_parameters.model_filepath is not None:
+        model.load_state_dict(torch.load(training_parameters.model_filepath))
+
     optimizer = optim.SGD(
         model.parameters(), lr=training_parameters.learning_rate
     )
-    loss_function = nn.CrossEntropyLoss()
     _train_all_epochs(
         model=model,
         training_loader=training_loader,
         validation_loader=validation_loader,
         optimizer=optimizer,
-        loss_function=loss_function,
         output_filepath=training_parameters.output_filepath,
         epochs=training_parameters.epochs,
     )

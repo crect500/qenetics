@@ -45,3 +45,13 @@ def test_input_file() -> Path:
 @pytest.fixture
 def test_dataset_directory() -> Path:
     return Path("tests/test_files/test_dataset")
+
+
+@pytest.fixture
+def test_h5_loader() -> cpg_sampler.H5CpGDataset:
+    return cpg_sampler.H5CpGDataset(
+        [
+            Path("tests/test_files/test_dataset/chr1.h5"),
+            Path("tests/test_files/test_dataset/chr1.h5"),
+        ]
+    )
