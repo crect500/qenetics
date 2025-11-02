@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field
 import logging
+from math import isnan
 from pathlib import Path
 
 import jax
@@ -289,6 +290,7 @@ def _evaluate_validation_set(
     accumulated_loss: float = 0.0
     accumulated_auc: float = 0.0
     model.eval()
+    invalid_auc_count = 0
     with torch.no_grad():
         for batch_index, validation_data in enumerate(validation_loader):
             inputs, labels = validation_data
@@ -298,15 +300,19 @@ def _evaluate_validation_set(
             true_positive_rate, false_positive_rate, _ = roc_curve(
                 labels[0][non_nan_indices], outputs[non_nan_indices]
             )
-            accumulated_auc += auc(false_positive_rate, true_positive_rate)
+            batch_auc: float = auc(false_positive_rate, true_positive_rate)
+            if isnan(batch_auc):
+                invalid_auc_count += 0
+            else:
+                accumulated_auc += auc(false_positive_rate, true_positive_rate)
             loss: Tensor = nn.functional.binary_cross_entropy(
                 outputs[non_nan_indices], labels[0][non_nan_indices]
             )
             accumulated_loss += loss
 
-    return accumulated_loss / (batch_index + 1), accumulated_auc / (
-        batch_index + 1
-    )
+    return accumulated_loss / (
+        batch_index + 1 - invalid_auc_count
+    ), accumulated_auc / (batch_index + 1)
 
 
 def _train_all_epochs(
