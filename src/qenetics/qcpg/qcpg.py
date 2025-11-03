@@ -401,12 +401,12 @@ def train_qnn_circuit(training_parameters: TrainingParameters) -> None:
         logger.info(training_parameters.data_directory / f"chr{chromosome}.h5")
 
     logger.info("Using the following training parameters:")
-    logger.info(f"\tEntangler: {training_parameters.entangler}")
-    logger.info(f"\tLayer quantity: {training_parameters.layer_quantity}")
-    logger.info(f"\tLearning rate: {training_parameters.learning_rate}")
-    logger.info(f"\tEpochs: {training_parameters.epochs}")
-    logger.info(f"\tL1 regularization: {training_parameters.l1_regularizer}")
-    logger.info(f"\tL2 regularization: {training_parameters.l2_regularizer}")
+    logger.info("\tEntangler: %s", training_parameters.entangler)
+    logger.info("\tLayer quantity: %d", training_parameters.layer_quantity)
+    logger.info("\tLearning rate: %f", training_parameters.learning_rate)
+    logger.info("\tEpochs: %d", training_parameters.epochs)
+    logger.info("\tL1 regularization: %f", training_parameters.l1_regularizer)
+    logger.info("\tL2 regularization: %f", training_parameters.l2_regularizer)
 
     sequence_length: int = training_loader.dataset.data.shape[1]
     output_shape: int = training_loader.dataset.experiment_quantity
