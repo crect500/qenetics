@@ -106,3 +106,60 @@ def test_extract_fasta_metadata() -> None:
 
     assert annotations["3"].length == 50
     assert annotations["3"].file_position == 285
+
+
+@pytest.mark.parametrize(
+    ("whole_sequence", "sequence_length", "line_length", "correct_sequence"),
+    [
+        ("A", 4, 2, None),
+        ("ACTGACTG", 4, 80, "ACAC"),
+        ("ACTG\nACTGACTG", 4, 80, "ACAC"),
+        ("ACTGACTG\nACTGACTG\nACTG", 16, 8, "ACTGACTGTGACTGAC"),
+    ],
+)
+def test_read_sequence(
+    whole_sequence: str,
+    sequence_length: int,
+    line_length: int,
+    correct_sequence: str | None,
+) -> None:
+    with TemporaryDirectory() as temp_dir:
+        test_file: Path = Path(temp_dir) / "test_file.fa"
+        with test_file.open("w") as fd:
+            fd.write(whole_sequence)
+
+        with test_file.open() as fd:
+            assert (
+                dna._read_sequence(fd, sequence_length, line_length)
+                == correct_sequence
+            )
+
+
+def test_find_methylation_sequence(
+    test_fasta_metadata: dict[str, dna.SequenceInfo],
+) -> None:
+    with Path("tests/test_files/test_sequence.fa").open() as fd:
+        assert (
+            dna.find_methylation_sequence(
+                "2", 16, test_fasta_metadata, fd, 4, 45
+            )
+            == "ATCG"
+        )
+        assert (
+            dna.find_methylation_sequence(
+                "2", 7, test_fasta_metadata, fd, 8, 45
+            )
+            == "ACTGAATG"
+        )
+        assert (
+            dna.find_methylation_sequence(
+                "2", 42, test_fasta_metadata, fd, 8, 45
+            )
+            == "GGGGAATT"
+        )
+        assert not dna.find_methylation_sequence(
+            "1", 1, test_fasta_metadata, fd, 4, 45
+        )
+        assert not dna.find_methylation_sequence(
+            "1", 43, test_fasta_metadata, fd, 4, 45
+        )

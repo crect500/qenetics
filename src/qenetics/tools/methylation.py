@@ -124,7 +124,7 @@ def _process_deepcpg_methylation_line(
     )
 
 
-def _process_methylation_line(
+def process_methylation_line(
     line: str,
     data_format: MethylationFormat = MethylationFormat.COV,
     minimum_samples: int = 1,
@@ -150,7 +150,7 @@ def _process_methylation_line(
         return _process_deepcpg_methylation_line(line, minimum_samples)
 
 
-def _determine_format(methylation_filepath: Path) -> MethylationFormat:
+def determine_format(methylation_filepath: Path) -> MethylationFormat:
     """
     Determine the format of the methylation file based on the filename.
 
@@ -188,11 +188,11 @@ def retrieve_methylation_data(
     -------
     Generator for MethylationInfo objects from the methylation file.
     """
-    data_format: MethylationFormat = _determine_format(methylation_filepath)
+    data_format: MethylationFormat = determine_format(methylation_filepath)
     with open(methylation_filepath) as fd:
         for line in fd.readlines():
             methylation_information: MethylationInfo | None = (
-                _process_methylation_line(line, data_format, minimum_samples)
+                process_methylation_line(line, data_format, minimum_samples)
             )
             if not methylation_information:
                 continue
@@ -271,7 +271,7 @@ def convert_methylation_profiles(
     output_format: MethylationFormat,
     minimum_samples: int = 1,
 ) -> None:
-    input_format: MethylationFormat = _determine_format(input_filepath)
+    input_format: MethylationFormat = determine_format(input_filepath)
     if output_format == MethylationFormat.COV:
         suffix: str = ".cov.txt"
     elif output_format == MethylationFormat.CPG:
@@ -294,8 +294,8 @@ def convert_methylation_profiles(
         open(output_filepath, "w") as output_fd,
     ):
         for line in input_fd.readlines():
-            read_methylation: MethylationInfo | None = (
-                _process_methylation_line(line, input_format, minimum_samples)
+            read_methylation: MethylationInfo | None = process_methylation_line(
+                line, input_format, minimum_samples
             )
             if read_methylation is not None:
                 output_fd.write(

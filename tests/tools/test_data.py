@@ -7,79 +7,59 @@ import numpy as np
 from numpy.typing import NDArray
 import pytest
 
-from qenetics.tools import cpg_sampler
+from qenetics.tools import data
 
 
 def test_H5CpGDataset(test_dataset_directory: Path) -> None:
     test_files: list[Path] = [
         test_dataset_directory / f"chr{i}.h5" for i in ["1", "2"]
     ]
-    dataset = cpg_sampler.H5CpGDataset(test_files)
+    dataset = data.H5CpGDataset(test_files)
     assert dataset.data.shape == (8, 8, 4)
     assert dataset.data.sum() == 64.0
     assert dataset.labels.shape == (8, 2)
     assert dataset.labels.sum() == 8
     assert len(dataset) == 8
-    data, labels = dataset[0]
-    assert (data == cpg_sampler.nucleotide_string_to_numpy("ATCGATCG")).all()
+    cpg_data, labels = dataset[0]
+    assert (cpg_data == data.nucleotide_string_to_numpy("ATCGATCG")).all()
     assert list(labels) == [0, 0]
 
 
-@pytest.mark.parametrize(
-    ("whole_sequence", "sequence_length", "line_length", "correct_sequence"),
-    [
-        ("A", 4, 2, None),
-        ("ACTGACTG", 4, 80, "ACAC"),
-        ("ACTG\nACTGACTG", 4, 80, "ACAC"),
-        ("ACTGACTG\nACTGACTG\nACTG", 16, 8, "ACTGACTGTGACTGAC"),
-    ],
-)
-def test_read_sequence(
-    whole_sequence: str,
-    sequence_length: int,
-    line_length: int,
-    correct_sequence: str | None,
-) -> None:
-    with TemporaryDirectory() as temp_dir:
-        test_file: Path = Path(temp_dir) / "test_file.fa"
-        with test_file.open("w") as fd:
-            fd.write(whole_sequence)
+def test_retrieve_chromosome_sequences() -> None:
+    experiment_names: list[str] = ["test1", "test2", "test3"]
+    unique_nucleotides_quantity: int = 4
+    profiles_by_position: dict[int, dict[str, float]] = {
+        1: {"test1": 0.0, "test2": 0.25},
+        2: {"test2": 0.5},
+        3: {"test1": 0.75},
+        4: {"test3": 1.0},
+    }
+    sequence_length: int = 8
+    valid_sequence: str = "ACTCGCTG"
+    invalid_sequence: str = "ACTTTCTG"
+    nan_sequence: str = "NNNNNNNN"
+    with mock.patch(
+        "qenetics.tools.dna.find_methylation_sequence"
+    ) as mock_find:
+        mock_find.side_effect = [
+            valid_sequence,
+            invalid_sequence,
+            nan_sequence,
+            valid_sequence,
+        ]
+        sequences, methylation_ratios = data._retrieve_chromosome_sequences(
+            profiles_by_position=profiles_by_position,
+            chromosome="1",
+            fasta_file_descriptor=None,
+            fasta_metadata={},
+            fasta_line_length=20,
+            sequence_length=sequence_length,
+            experiment_names=experiment_names,
+        )
 
-        with test_file.open() as fd:
-            assert (
-                cpg_sampler._read_sequence(fd, sequence_length, line_length)
-                == correct_sequence
-            )
-
-
-def test_find_methylation_sequence(
-    test_fasta_metadata: dict[str, cpg_sampler.SequenceInfo],
-) -> None:
-    with Path("tests/test_files/test_sequence.fa").open() as fd:
-        assert (
-            cpg_sampler.find_methylation_sequence(
-                "2", 16, test_fasta_metadata, fd, 4, 45
-            )
-            == "ATCG"
-        )
-        assert (
-            cpg_sampler.find_methylation_sequence(
-                "2", 7, test_fasta_metadata, fd, 8, 45
-            )
-            == "ACTGAATG"
-        )
-        assert (
-            cpg_sampler.find_methylation_sequence(
-                "2", 42, test_fasta_metadata, fd, 8, 45
-            )
-            == "GGGGAATT"
-        )
-        assert not cpg_sampler.find_methylation_sequence(
-            "1", 1, test_fasta_metadata, fd, 4, 45
-        )
-        assert not cpg_sampler.find_methylation_sequence(
-            "1", 43, test_fasta_metadata, fd, 4, 45
-        )
+    assert sequences.shape == (2, sequence_length, unique_nucleotides_quantity)
+    assert methylation_ratios[0][0] == 0.0
+    assert methylation_ratios[1][2] == 1.0
 
 
 @pytest.mark.parametrize(
@@ -93,15 +73,14 @@ def test_nucleotide_character_to_numpy(
         expected_array: NDArray[int] = np.array([0] * 4, dtype=int)
         expected_array[expected_int] = 1
         assert (
-            cpg_sampler.nucleotide_character_to_numpy(nucleotide)
-            == expected_array
+            data.nucleotide_character_to_numpy(nucleotide) == expected_array
         ).all()
     else:
         with pytest.raises(
             ValueError,
             match=f"{nucleotide} is not a valid nucleotide designator",
         ):
-            _ = cpg_sampler.nucleotide_character_to_numpy(nucleotide)
+            _ = data.nucleotide_character_to_numpy(nucleotide)
 
 
 @pytest.mark.parametrize(
@@ -117,9 +96,7 @@ def test_nucleotide_character_to_numpy(
 def test_nucleotide_string_to_numpy(
     sequence: str, expected_array: list[int]
 ) -> None:
-    one_hot_matrix: NDArray[int] = cpg_sampler.nucleotide_string_to_numpy(
-        sequence
-    )
+    one_hot_matrix: NDArray[int] = data.nucleotide_string_to_numpy(sequence)
     if len(expected_array) == 0:
         assert one_hot_matrix is None
     else:
@@ -140,9 +117,7 @@ def test_samples_to_numpy(
     valid_samples: int = 3
     sequence_length: int = 12
     unique_nucleotides_quantity: int = 4
-    samples, methylations = cpg_sampler.samples_to_numpy(
-        test_input_file, threshold
-    )
+    samples, methylations = data.samples_to_numpy(test_input_file, threshold)
     assert np.sum(methylations) == quantity_methylated
     assert samples.shape == (
         valid_samples,
@@ -162,46 +137,7 @@ def test_samples_to_numpy(
     ],
 )
 def test_validate_sequence(sequence: str, expected_result: bool) -> None:
-    assert cpg_sampler._validate_sequence(sequence) == expected_result
-
-
-def test_retrieve_chromosome_sequences() -> None:
-    experiment_names: list[str] = ["test1", "test2", "test3"]
-    unique_nucleotides_quantity: int = 4
-    profiles_by_position: dict[int, dict[str, float]] = {
-        1: {"test1": 0.0, "test2": 0.25},
-        2: {"test2": 0.5},
-        3: {"test1": 0.75},
-        4: {"test3": 1.0},
-    }
-    sequence_length: int = 8
-    valid_sequence: str = "ACTCGCTG"
-    invalid_sequence: str = "ACTTTCTG"
-    nan_sequence: str = "NNNNNNNN"
-    with mock.patch(
-        "qenetics.tools.cpg_sampler.find_methylation_sequence"
-    ) as mock_find:
-        mock_find.side_effect = [
-            valid_sequence,
-            invalid_sequence,
-            nan_sequence,
-            valid_sequence,
-        ]
-        sequences, methylation_ratios = (
-            cpg_sampler._retrieve_chromosome_sequences(
-                profiles_by_position=profiles_by_position,
-                chromosome="1",
-                fasta_file_descriptor=None,
-                fasta_metadata={},
-                fasta_line_length=20,
-                sequence_length=sequence_length,
-                experiment_names=experiment_names,
-            )
-        )
-
-    assert sequences.shape == (2, sequence_length, unique_nucleotides_quantity)
-    assert methylation_ratios[0][0] == 0.0
-    assert methylation_ratios[1][2] == 1.0
+    assert data._validate_sequence(sequence) == expected_result
 
 
 def test_create_h5_dataset() -> None:
@@ -214,7 +150,7 @@ def test_create_h5_dataset() -> None:
     )
     with TemporaryDirectory() as temp_dir:
         temp_h5_filepath = Path(temp_dir) / "chr1.h5"
-        cpg_sampler._create_h5_dataset(
+        data._create_h5_dataset(
             temp_h5_filepath, sequences, methylation_ratios, experiment_names
         )
         with h5py.File(temp_h5_filepath) as fd:

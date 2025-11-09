@@ -86,13 +86,13 @@ def test_process_methylation_line() -> None:
             "qenetics.tools.methylation._process_cpg_methylation_line"
         ) as mock_cpg,
     ):
-        _ = methylation._process_methylation_line(
+        _ = methylation.process_methylation_line(
             "", methylation.MethylationFormat.COV
         )
         mock_cov.assert_called_once()
         mock_cpg.assert_not_called()
 
-        _ = methylation._process_methylation_line(
+        _ = methylation.process_methylation_line(
             "", methylation.MethylationFormat.CPG
         )
         mock_cov.assert_called_once()

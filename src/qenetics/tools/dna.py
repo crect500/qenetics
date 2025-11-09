@@ -285,3 +285,85 @@ def extract_fasta_metadata(
             )  # Skip newlines
 
     return annotations
+
+
+def _read_sequence(
+    file_descriptor: TextIOBase, sequence_length: int, line_length: int
+) -> str | None:
+    """
+    Read a sequence of nucleotides from a FASTA file.
+
+    Args
+    ----
+    file_descriptor: The file descriptor, already open for reading ASCII data.
+    sequence_length: The length of the sequence to extract.
+    line_length: The length of a line of nucleotide data in the FASTA file.
+
+    Returns
+    -------
+    A sequence of nucleotides, if valid. Otherwise, returns None.
+    """
+    cg_length: int = 2
+    included_cg_length: int = sequence_length + cg_length
+    sequence: str = file_descriptor.readline().rstrip()
+    half_length = int(sequence_length / 2)
+    if len(sequence) > included_cg_length:
+        return (
+            sequence[:half_length]
+            + sequence[half_length + 2 : included_cg_length]
+        )
+
+    newline_quantity = int((included_cg_length - len(sequence)) / line_length)
+    sequence += file_descriptor.read(
+        included_cg_length - len(sequence) + newline_quantity
+    ).replace("\n", "")
+    if len(sequence) > sequence_length:
+        return (
+            sequence[:half_length]
+            + sequence[half_length + cg_length : included_cg_length]
+        )
+
+    return None
+
+
+def find_methylation_sequence(
+    chromosome: str,
+    position: int,
+    genome_metadata: dict[str, SequenceInfo],
+    file_descriptor: TextIOBase,
+    sequence_length: int,
+    line_length: int,
+) -> str | None:
+    """
+    Extract nucleotide sequence from file given methylation site information.
+
+    Args
+    ----
+    chromosome: The chromosome character designator.
+    position: The start position of the CpG site within the chromosome.
+    genome_metadata: The reference genome file metadata.
+    file_descriptor: An open ASCII file descriptor for reference genome.
+    sequence_length: The length of sequence to retrieve.
+    line_length: The length of a line of nucleotide data in the FASTA file.
+
+    Returns
+    -------
+    A sequence of nucleotides, if valid. Otherwise, returns None.
+    """
+    if not genome_metadata.get(chromosome):
+        return None
+
+    cg_length: int = 2
+    chromosome_metadata: SequenceInfo = genome_metadata[chromosome]
+    half_sequence_length = int(sequence_length / 2)
+    if (
+        position - half_sequence_length < 0
+        or position + half_sequence_length + cg_length
+        >= chromosome_metadata.length
+    ):
+        return None
+
+    file_descriptor.seek(
+        chromosome_metadata.file_position + position - half_sequence_length
+    )
+    return _read_sequence(file_descriptor, sequence_length, line_length)
