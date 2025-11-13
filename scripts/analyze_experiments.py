@@ -65,6 +65,7 @@ if __name__ == "__main__":
             list(args.experiments_directory.iterdir()),
             args.sequence_length,
             args.fasta_filepath,
+            minimum_samples=args.minimum_samples,
         )
     )
     analysis.write_experiment_statistics(
