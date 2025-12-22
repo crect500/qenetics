@@ -1,6 +1,10 @@
 from dataclasses import dataclass
+from glob import glob
 from pathlib import Path
 import csv
+
+import h5py
+import polars as pl
 
 from qenetics.tools import dna, methylation
 
@@ -146,3 +150,138 @@ def write_experiment_statistics(
                 "valid_unmethylated": totals.valid_unmethylated,
             }
         )
+
+
+def _add_to_invalid_dict(
+    invalid_sites: dict[str, dict[str, list[int]]],
+    methylation_profile: methylation.MethylationInfo,
+    key: str,
+) -> None:
+    if methylation_profile.chromosome not in invalid_sites:
+        invalid_sites[methylation_profile.chromosome] = {
+            key: [methylation_profile.position]
+        }
+    elif key not in invalid_sites[methylation_profile.chromosome]:
+        invalid_sites[methylation_profile.chromosome][key] = [
+            methylation_profile.position
+        ]
+    else:
+        invalid_sites[methylation_profile.chromosome][key].append(
+            methylation_profile.position
+        )
+
+
+def _find_invalid_sites(
+    methylation_filepath: Path,
+    sequence_length: int,
+    fasta_filepath: Path,
+    fasta_metadata: dict[str, dna.SequenceInfo],
+    fasta_line_length: int,
+    minimum_samples: int = 1,
+) -> dict[str, dict[str, list[int]]]:
+    methylation_format: methylation.MethylationFormat = (
+        methylation.determine_format(methylation_filepath)
+    )
+    invalid_sites: dict[str, dict[str, list[int]]] = {}
+    with (
+        methylation_filepath.open() as methylation_fd,
+        fasta_filepath.open() as fasta_fd,
+    ):
+        for methylation_line in methylation_fd.readlines():
+            methylation_profile: methylation.MethylationInfo = (
+                methylation.process_methylation_line(
+                    methylation_line, methylation_format
+                )
+            )
+            if methylation_profile.experiment_count < minimum_samples:
+                _add_to_invalid_dict(
+                    invalid_sites, methylation_profile, "invalid_by_minimum"
+                )
+                continue
+
+            sequence: str | None = dna.find_methylation_sequence(
+                chromosome=methylation_profile.chromosome,
+                position=methylation_profile.position,
+                genome_metadata=fasta_metadata,
+                file_descriptor=fasta_fd,
+                sequence_length=sequence_length,
+                line_length=fasta_line_length,
+            )
+            if sequence is None:
+                _add_to_invalid_dict(
+                    invalid_sites, methylation_profile, "invalid_by_boundaries"
+                )
+                continue
+
+            if "N" in sequence:
+                _add_to_invalid_dict(
+                    invalid_sites, methylation_profile, "invalid_by_missing"
+                )
+                continue
+
+    return invalid_sites
+
+
+def record_invalid_sites(
+    methylation_filepaths: list[Path],
+    fasta_filepath: Path,
+    sequence_length: int,
+    minimum_samples: int = 1,
+    crlf: bool = False,
+) -> dict[str, dict[str, dict[str, list[int]]]]:
+    fasta_line_length: int = dna.determine_line_length(fasta_filepath)
+    fasta_metadata: dict[str, dna.SequenceInfo] = dna.extract_fasta_metadata(
+        fasta_filepath, crlf=crlf
+    )
+    sites_by_experiment: dict[str, dict[str, dict[str, list[int]]]] = {}
+    for methylation_filepath in methylation_filepaths:
+        sites_by_experiment[methylation_filepath.name.split(".")[0]] = (
+            _find_invalid_sites(
+                methylation_filepath,
+                sequence_length,
+                fasta_filepath,
+                fasta_metadata,
+                fasta_line_length,
+                minimum_samples,
+            )
+        )
+
+    return sites_by_experiment
+
+
+def compare_sites(
+    invalid_sites: dict[str, dict[str, dict[str, list[int]]]],
+    deepcpg_data_directory: Path,
+) -> None:
+    missing_sites = {}
+    for experiment, sites_by_chromosome in invalid_sites.items():
+        missing_sites[experiment] = {}
+        for chromosome, sites_by_reason in sites_by_chromosome.items():
+            missing_sites[experiment][chromosome] = ExperimentStatistics()
+            chromosome_filepaths: list[Path] = [
+                Path(filepath)
+                for filepath in glob(
+                    str(deepcpg_data_directory) + f"c{chromosome}_*.h5"
+                )
+            ]
+            positions = pl.Series(dtype=pl.Int32)
+            for filepath in chromosome_filepaths:
+                with h5py.File(filepath) as dataset:
+                    positions.extend(pl.Series(dataset["pos"]))
+
+            for reason, position in sites_by_reason:
+                if position not in positions:
+                    if reason == "invalid_by_minimum":
+                        missing_sites[experiment][
+                            chromosome
+                        ].invalid_by_minimum += 1
+                    elif reason == "invalid_by_boundaries":
+                        missing_sites[experiment][
+                            chromosome
+                        ].invalid_by_sequence_length += 1
+                    elif reason == "invalid_by_missing":
+                        missing_sites[experiment][
+                            chromosome
+                        ].invalid_by_missing_nucleotide += 1
+
+    return missing_sites
