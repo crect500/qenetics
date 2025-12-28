@@ -252,7 +252,7 @@ def record_invalid_sites(
 def compare_sites(
     invalid_sites: dict[str, dict[str, dict[str, list[int]]]],
     deepcpg_data_directory: Path,
-) -> None:
+) -> dict[str, dict[str, dict[str, list[int]]]]:
     missing_sites = {}
     for experiment, sites_by_chromosome in invalid_sites.items():
         missing_sites[experiment] = {}
@@ -264,24 +264,51 @@ def compare_sites(
                     str(deepcpg_data_directory) + f"c{chromosome}_*.h5"
                 )
             ]
-            positions = pl.Series(dtype=pl.Int32)
+            deepcpg_positions = pl.Series(dtype=pl.Int32)
+            with h5py.File(chromosome_filepaths[0]) as dataset:
+                output_names = dataset["outputs"]["cpg"].keys()
+
+            deepcpg_outputs = pl.DataFrame(
+                schema={group: pl.Int8 for group in output_names}
+            )
+
             for filepath in chromosome_filepaths:
                 with h5py.File(filepath) as dataset:
-                    positions.extend(pl.Series(dataset["pos"]))
+                    deepcpg_positions.extend(
+                        pl.Series(dataset["pos"], dtype=pl.Int32)
+                    )
+                    deepcpg_outputs.extend(
+                        pl.DataFrame(
+                            {
+                                group: pl.Series(
+                                    dataset["outputs"]["cpg"], dtype=pl.Int8
+                                )
+                            }
+                            for group in output_names
+                        )
+                    )
 
-            for reason, position in sites_by_reason:
-                if position not in positions:
-                    if reason == "invalid_by_minimum":
-                        missing_sites[experiment][
-                            chromosome
-                        ].invalid_by_minimum += 1
-                    elif reason == "invalid_by_boundaries":
-                        missing_sites[experiment][
-                            chromosome
-                        ].invalid_by_sequence_length += 1
-                    elif reason == "invalid_by_missing":
-                        missing_sites[experiment][
-                            chromosome
-                        ].invalid_by_missing_nucleotide += 1
+            matching_experiment_split: list[str] = experiment.split("_")
+            matching_experiment_name: str = (
+                matching_experiment_split[1]
+                + "_"
+                + matching_experiment_split[2]
+            )
+            for reason, new_positions in sites_by_reason.items():
+                for position in new_positions:
+                    index: int = deepcpg_positions.index_of(position)
+                    if deepcpg_positions[matching_experiment_name][index] != 0:
+                        if reason == "invalid_by_minimum":
+                            missing_sites[experiment][
+                                chromosome
+                            ].invalid_by_minimum += 1
+                        elif reason == "invalid_by_boundaries":
+                            missing_sites[experiment][
+                                chromosome
+                            ].invalid_by_sequence_length += 1
+                        elif reason == "invalid_by_missing":
+                            missing_sites[experiment][
+                                chromosome
+                            ].invalid_by_missing_nucleotide += 1
 
     return missing_sites

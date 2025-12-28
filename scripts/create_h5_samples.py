@@ -1,7 +1,7 @@
 from argparse import ArgumentParser, Namespace
 from pathlib import Path
 
-from qenetics.tools.cpg_sampler import (
+from qenetics.tools.data import (
     create_h5_dataset_from_methylation_profiles,
 )
 
