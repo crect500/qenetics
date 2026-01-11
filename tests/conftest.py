@@ -43,8 +43,18 @@ def test_input_file() -> Path:
 
 
 @pytest.fixture
-def test_dataset_directory() -> Path:
-    return Path("tests/test_files/test_dataset")
+def test_deepcpg_dataset_directory() -> Path:
+    return Path("tests/test_files/test_deepcpg_dataset")
+
+
+@pytest.fixture
+def test_qcpg_dataset_directory() -> Path:
+    return Path("tests/test_files/test_qcpg_dataset")
+
+
+@pytest.fixture
+def test_single_experiment_dataset_directory() -> Path:
+    return Path("tests/test_files/test_single_experiment_dataset")
 
 
 @pytest.fixture

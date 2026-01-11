@@ -297,7 +297,7 @@ def compare_sites(
             for reason, new_positions in sites_by_reason.items():
                 for position in new_positions:
                     index: int = deepcpg_positions.index_of(position)
-                    if deepcpg_positions[matching_experiment_name][index] != 0:
+                    if deepcpg_positions[matching_experiment_name][index] != -1:
                         if reason == "invalid_by_minimum":
                             missing_sites[experiment][
                                 chromosome

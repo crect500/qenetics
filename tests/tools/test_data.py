@@ -64,16 +64,21 @@ def test_retrieve_chromosome_sequences() -> None:
 
 @pytest.mark.parametrize(
     ("nucleotide", "expected_int"),
-    [("A", 0), ("T", 1), ("C", 2), ("G", 3), ("N", -1)],
+    [("A", 0), ("T", 1), ("C", 2), ("G", 3), ("N", -1), ("x", -2)],
 )
 def test_nucleotide_character_to_numpy(
     nucleotide: str, expected_int: int
 ) -> None:
-    if expected_int >= 0:
+    if expected_int > -1:
         expected_array: NDArray[int] = np.array([0] * 4, dtype=int)
         expected_array[expected_int] = 1
         assert (
             data.nucleotide_character_to_numpy(nucleotide) == expected_array
+        ).all()
+    elif expected_int == -1:
+        assert (
+            data.nucleotide_character_to_numpy(nucleotide)
+            == np.array([0] * 4, dtype=int)
         ).all()
     else:
         with pytest.raises(
@@ -90,7 +95,7 @@ def test_nucleotide_character_to_numpy(
         ("AT", [0, 1]),
         ("ATC", [0, 1, 2]),
         ("ATCG", [0, 1, 2, 3]),
-        ("NATCGN", []),
+        ("NATCGN", [-1, 0, 1, 2, 3, -1]),
     ],
 )
 def test_nucleotide_string_to_numpy(
@@ -103,9 +108,56 @@ def test_nucleotide_string_to_numpy(
         working_matrix: list[list[int]] = []
         for nucleotide in expected_array:
             working_array: list[int] = [0] * 4
-            working_array[nucleotide] = 1
+            if nucleotide != -1:
+                working_array[nucleotide] = 1
             working_matrix.append(working_array)
         assert (one_hot_matrix == np.array(working_matrix, dtype=int)).all()
+
+
+@pytest.mark.parametrize(
+    ("nucleotide_integer"),
+    [0, 1, 2, 3, -1, -2],
+)
+def test_nucleotide_integer_to_numpy(nucleotide_integer: int) -> None:
+    if nucleotide_integer > -1:
+        expected_array: NDArray[int] = np.array([0] * 4, dtype=int)
+        expected_array[nucleotide_integer] = 1
+        assert (
+            data.nucleotide_integer_to_numpy(nucleotide_integer)
+            == expected_array
+        ).all()
+    elif nucleotide_integer == -1:
+        assert (
+            data.nucleotide_integer_to_numpy(nucleotide_integer)
+            == np.array([0] * 4, dtype=int)
+        ).all()
+    else:
+        with pytest.raises(
+            ValueError,
+            match=f"{nucleotide_integer} is not a valid nucleotide designator",
+        ):
+            _ = data.nucleotide_integer_to_numpy(nucleotide_integer)
+
+
+@pytest.mark.parametrize(
+    ("sequence"),
+    [
+        [0],
+        [0, 1],
+        [0, 1, 2],
+        [0, 1, 2, 3],
+        [-1, 0, 1, 2, 3, -1],
+    ],
+)
+def test_nucleotide_array_to_numpy(sequence: list[int]) -> None:
+    one_hot_matrix: NDArray[int] = data.nucleotide_array_to_numpy(sequence)
+    working_matrix: list[list[int]] = []
+    for nucleotide in sequence:
+        working_array: list[int] = [0] * 4
+        if nucleotide != -1:
+            working_array[nucleotide] = 1
+        working_matrix.append(working_array)
+    assert (one_hot_matrix == np.array(working_matrix, dtype=int)).all()
 
 
 @pytest.mark.parametrize(

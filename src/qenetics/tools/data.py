@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from io import TextIOBase
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 import h5py
 import numpy as np
@@ -126,6 +126,8 @@ def nucleotide_character_to_numpy(nucleotide: str) -> NDArray[int]:
         return np.array([0, 0, 1, 0], dtype=int)
     if nucleotide == "G":
         return np.array([0, 0, 0, 1], dtype=int)
+    if nucleotide == "N":
+        return np.array([0, 0, 0, 0], dtype=int)
 
     raise ValueError(f"{nucleotide} is not a valid nucleotide designator")
 
@@ -142,16 +144,54 @@ def nucleotide_string_to_numpy(sequence: str) -> NDArray[int] | None:
     -------
     A matrix of one-hot encoded values.
     """
-    if "N" in sequence:
-        return None
-    else:
-        return np.array(
-            [
-                nucleotide_character_to_numpy(nucleotide)
-                for nucleotide in sequence
-            ],
-            dtype=int,
-        )
+    return np.array(
+        [nucleotide_character_to_numpy(nucleotide) for nucleotide in sequence],
+        dtype=int,
+    )
+
+
+def nucleotide_integer_to_numpy(nucleotide: int) -> NDArray[int]:
+    """
+    Convert a nucleotide integer representation to a one-hot array.
+
+    Args
+    ----
+    nucleotide: The nucleotide integer.
+
+    Returns
+    -------
+    The one-hot encoded array.
+    """
+    if nucleotide == 0:
+        return np.array([1, 0, 0, 0], dtype=int)
+    if nucleotide == 1:
+        return np.array([0, 1, 0, 0], dtype=int)
+    if nucleotide == 2:
+        return np.array([0, 0, 1, 0], dtype=int)
+    if nucleotide == 3:
+        return np.array([0, 0, 0, 1], dtype=int)
+    if nucleotide == -1:
+        return np.array([0, 0, 0, 0], dtype=int)
+
+    raise ValueError(f"{nucleotide} is not a valid nucleotide designator")
+
+
+def nucleotide_array_to_numpy(sequence: Iterable[int]) -> NDArray[int] | None:
+    """
+    Convert a list of nucleotide integer representations to one-hot arrays.
+
+    Args
+    ----
+    sequence: A list of nucleotide integer representations.
+
+    Returns
+    -------
+    A matrix of one-hot encoded values.
+    """
+    return np.array(
+        [nucleotide_integer_to_numpy(nucleotide) for nucleotide in sequence],
+        dtype=int,
+    )
 
 
 def samples_to_numpy(
