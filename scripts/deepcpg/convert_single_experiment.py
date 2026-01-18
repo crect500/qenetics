@@ -1,4 +1,5 @@
 from argparse import ArgumentParser, Namespace
+import logging
 from pathlib import Path
 
 from qenetics.tools.converters import extract_deepcpg_experiment_to_qcpg
@@ -43,12 +44,38 @@ def _parse_script_args() -> Namespace:
         default=-1.0,
         help="The threshold at which to consider a sample methylated.",
     )
+    parser.add_argument(
+        "-l",
+        "--log-file",
+        dest="log_filepath",
+        type=Path,
+        required=False,
+        help="The filepath at which to write log output.",
+    )
+    parser.add_argument(
+        "--log-level",
+        dest="log_level",
+        type=str,
+        required=False,
+        default="info",
+        help="The level of the logging output.",
+    )
 
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = _parse_script_args()
+    if args.log_filepath is not None:
+        if args.log_level == "debug":
+            logging.basicConfig(
+                filename=str(args.log_filepath.absolute()), level=logging.DEBUG
+            )
+        else:
+            logging.basicConfig(
+                filename=str(args.log_filepath.absolute()), level=logging.INFO
+            )
+
     extract_deepcpg_experiment_to_qcpg(
         args.deepcpg_directory,
         args.qcpg_directory,

@@ -1,4 +1,5 @@
 from glob import glob
+import logging
 from pathlib import Path
 
 from h5py import File
@@ -9,6 +10,8 @@ from qenetics.tools.data import (
     UNIQUE_NUCLEOTIDE_QUANTITY,
     nucleotide_array_to_numpy,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def read_quantity_examples_per_chromosome(
@@ -53,6 +56,7 @@ def extract_deepcpg_experiment_to_qcpg(
         h5_truth_dtype = "i1"
 
     sequence_length: int = _determine_sequence_length(deepcpg_directory)
+    logger.info("Found sequences of length %d", sequence_length)
     schema: dict[str, pl.Array | pl.Float64] = {
         "methylation_sequences": pl.Array(
             pl.Int8, (sequence_length, UNIQUE_NUCLEOTIDE_QUANTITY)
@@ -63,6 +67,7 @@ def extract_deepcpg_experiment_to_qcpg(
         filepath.stem.split("_")[0][1:]
         for filepath in deepcpg_directory.iterdir()
     }
+    logger.info("Found chromosomes %s", str(chromosomes))
     for chromosome in chromosomes:
         current_data = pl.DataFrame(schema=schema)
         deepcpg_filepaths: list[Path] = [
@@ -70,6 +75,7 @@ def extract_deepcpg_experiment_to_qcpg(
             for filepath in glob(str(deepcpg_directory / f"c{chromosome}_*.h5"))
         ]
         for filepath in deepcpg_filepaths:
+            logger.debug("Processing file %s", str(filepath))
             with File(filepath) as deepcpg_dataset:
                 if experiment_name not in deepcpg_dataset["outputs"].keys():
                     raise RuntimeError(
@@ -92,6 +98,13 @@ def extract_deepcpg_experiment_to_qcpg(
                         deepcpg_dataset["outputs"][experiment_name], dtype=float
                     ),
                 )
+                if len(methylation_ratios) != len(methylation_sequences):
+                    raise RuntimeError(
+                        "Found %d sequences but %d ratios in file %s",
+                        len(methylation_sequences),
+                        len(methylation_ratios),
+                        str(filepath),
+                    )
                 current_data = pl.concat(
                     [
                         current_data,
@@ -102,7 +115,9 @@ def extract_deepcpg_experiment_to_qcpg(
                     ]
                 )
 
+        logger.info("Sample quantity before filtering: %d", len(current_data))
         current_data = current_data.filter(pl.col("methylation_ratios") != -1.0)
+        logger.info("Sample quantity after filtering: %d", len(current_data))
 
         if polars_truth_dtype == pl.Int8:
             current_data = current_data.with_columns(
