@@ -68,8 +68,9 @@ def extract_deepcpg_experiment_to_qcpg(
         for filepath in deepcpg_directory.iterdir()
     }
     logger.info("Found chromosomes %s", str(chromosomes))
+    current_data = pl.DataFrame(schema=schema)
     for chromosome in chromosomes:
-        current_data = pl.DataFrame(schema=schema)
+        current_data.clear()
         deepcpg_filepaths: list[Path] = [
             Path(filepath)
             for filepath in glob(str(deepcpg_directory / f"c{chromosome}_*.h5"))
@@ -111,13 +112,11 @@ def extract_deepcpg_experiment_to_qcpg(
                         pl.DataFrame(
                             [methylation_sequences, methylation_ratios],
                             schema=schema,
-                        ),
+                        ).filter(pl.col("methylation_ratios") != -1.0),
                     ]
                 )
 
-        logger.info("Sample quantity before filtering: %d", len(current_data))
-        current_data = current_data.filter(pl.col("methylation_ratios") != -1.0)
-        logger.info("Sample quantity after filtering: %d", len(current_data))
+        logger.info("Samples found after filtering: %d", len(current_data))
 
         if polars_truth_dtype == pl.Int8:
             current_data = current_data.with_columns(
