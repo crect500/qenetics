@@ -35,8 +35,11 @@ class H5CpGDataset(Dataset):
         self.file_list = filepaths
         with h5py.File(filepaths[0]) as fd:
             self.sequence_length = fd["methylation_sequences"].shape[1]
-            self.experiment_names = fd["methylation_ratios"].keys()
-            self.experiment_quantity = len(self.experiment_names)
+            if isinstance(fd["methylation_ratios"], h5py.Group):
+                self.experiment_names = fd["methylation_ratios"].keys()
+                self.experiment_quantity = len(self.experiment_names)
+            else:
+                self.experiment_quantity = 1
 
         self.chromosome_indices = {}
         self._allocate_tensors(filepaths)
@@ -71,12 +74,17 @@ class H5CpGDataset(Dataset):
             dtype=torch.float,
             requires_grad=False,
         )
-        self.labels = torch.empty(
-            sample_quantity,
-            self.experiment_quantity,
-            dtype=torch.float,
-            requires_grad=False,
-        )
+        if self.experiment_quantity > 1:
+            self.labels = torch.empty(
+                sample_quantity,
+                self.experiment_quantity,
+                dtype=torch.float,
+                requires_grad=False,
+            )
+        else:
+            self.labels = torch.empty(
+                sample_quantity, dtype=torch.float, requires_grad=False
+            )
 
     def _fill_tensors(
         self: H5CpGDataset, filepaths: list[Path], threshold: float = 0.5
@@ -93,20 +101,30 @@ class H5CpGDataset(Dataset):
                 ] = torch.tensor(
                     fd["methylation_sequences"], requires_grad=False
                 )
-                for label_index, experiment_name in enumerate(
-                    fd["methylation_ratios"].keys()
-                ):
-                    self.labels[
-                        self.chromosome_indices[
-                            chromosome
-                        ].start : self.chromosome_indices[chromosome].end,
-                        label_index,
-                    ] = torch.tensor(
+                if self.experiment_quantity > 1:
+                    for label_index, experiment_name in enumerate(
+                        fd["methylation_ratios"].keys()
+                    ):
+                        self.labels[
+                            self.chromosome_indices[
+                                chromosome
+                            ].start : self.chromosome_indices[chromosome].end,
+                            label_index,
+                        ] = torch.tensor(
+                            [
+                                0 if methylation_ratio < threshold else 1
+                                for methylation_ratio in fd[
+                                    "methylation_ratios"
+                                ][experiment_name]
+                            ],
+                            dtype=torch.float,
+                            requires_grad=False,
+                        )
+                else:
+                    self.labels = torch.tensor(
                         [
                             0 if methylation_ratio < threshold else 1
-                            for methylation_ratio in fd["methylation_ratios"][
-                                experiment_name
-                            ]
+                            for methylation_ratio in fd["methylation_ratios"]
                         ],
                         dtype=torch.float,
                         requires_grad=False,

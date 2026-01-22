@@ -36,7 +36,7 @@ class TrainingParameters:
     learning_rate: float = 0.0001
     l1_regularizer: float = 0.0
     l2_regularizer: float = 0.0
-    batch_size: int = 1
+    batch_size: int = 128
     report_every: int = 1000
     model_filepath: Path | None = None
 
