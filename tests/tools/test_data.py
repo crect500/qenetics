@@ -6,23 +6,41 @@ import h5py
 import numpy as np
 from numpy.typing import NDArray
 import pytest
+from torch.utils.data import DataLoader
 
 from qenetics.tools import data
 
 
-def test_H5CpGDataset(test_dataset_directory: Path) -> None:
+def test_H5CpGDataset(test_qcpg_dataset_directory: Path) -> None:
     test_files: list[Path] = [
-        test_dataset_directory / f"chr{i}.h5" for i in ["1", "2"]
+        test_qcpg_dataset_directory / f"chr{i}.h5" for i in ["1", "2"]
     ]
     dataset = data.H5CpGDataset(test_files)
-    assert dataset.data.shape == (8, 8, 4)
-    assert dataset.data.sum() == 64.0
-    assert dataset.labels.shape == (8, 2)
-    assert dataset.labels.sum() == 8
-    assert len(dataset) == 8
+    assert dataset.data.shape == (16, 10, 4)
+    assert dataset.data.sum() == 128.0
+    assert dataset.labels.shape == (16, 4)
+    assert dataset.labels.sum() == 24
+    assert len(dataset) == 16
     cpg_data, labels = dataset[0]
-    assert (cpg_data == data.nucleotide_string_to_numpy("ATCGATCG")).all()
-    assert list(labels) == [0, 0]
+    assert (cpg_data == data.nucleotide_string_to_numpy("NATCGNATCG")).all()
+    assert list(labels) == [0.0, 0.0, 1.0, 1.0]
+
+
+def test_h5_cpg_data_loader(test_qcpg_dataset_directory: Path) -> None:
+    test_files: list[Path] = [
+        test_qcpg_dataset_directory / f"chr{i}.h5" for i in ["1", "2"]
+    ]
+    data_loader = DataLoader(data.H5CpGDataset(test_files), batch_size=1)
+    for test_samples in data_loader:
+        test_sequences, test_labels = test_samples
+        assert test_sequences.shape == (1, 10, 4)
+        assert test_labels.shape == (1, 4)
+
+    data_loader = DataLoader(data.H5CpGDataset(test_files), batch_size=2)
+    for test_samples in data_loader:
+        test_sequences, test_labels = test_samples
+        assert test_sequences.shape == (2, 10, 4)
+        assert test_labels.shape == (2, 4)
 
 
 def test_retrieve_chromosome_sequences() -> None:

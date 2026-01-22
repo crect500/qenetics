@@ -15,7 +15,7 @@ from torch import nn, optim, Tensor
 from torch.utils.data import DataLoader
 
 from qenetics.qcpg import qcpg_models
-from qenetics.tools import cpg_sampler, metrics
+from qenetics.tools import data, dna, metrics
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +43,7 @@ class TrainingParameters:
 
 def _strongly_entangled_run_circuit(
     parameters: NDArray[float],
-    sequence: list[cpg_sampler.Nucleotide],
+    sequence: list[dna.Nucleotide],
 ) -> float:
     """
     Run a qcpg circuit with a StronglyEntangled ansatz as the underlying model.
@@ -68,7 +68,7 @@ def _strongly_entangled_run_circuit(
 
     @qml.qnode(device)
     def _run_circuit(
-        sequence: list[cpg_sampler.Nucleotide],
+        sequence: list[dna.Nucleotide],
         circuit_parameters: NDArray[float],
     ):
         qcpg_models.single_encode_all_nucleotides(sequence)
@@ -84,7 +84,7 @@ def _strongly_entangled_run_circuit(
 
 def _strongly_entangled_run_calculate_loss(
     parameters: NDArray[float],
-    sequences: list[list[cpg_sampler.Nucleotide]],
+    sequences: list[list[dna.Nucleotide]],
     methylations: NDArray[int],
 ) -> jax.Array:
     """
@@ -121,7 +121,7 @@ def _strongly_entangled_run_calculate_loss(
 
 def _strongly_entangled_run_update_parameters(
     parameters: NDArray[float],
-    sequences: list[list[cpg_sampler.Nucleotide]],
+    sequences: list[list[dna.Nucleotide]],
     methylations: NDArray[int],
     optimizer: optax.GradientTransformationExtraArgs,
     optimizer_state: optax.GradientTransformationExtraArgs,
@@ -152,7 +152,7 @@ def _strongly_entangled_run_update_parameters(
 
 def _evaluate_test_performance(
     parameters: NDArray[float],
-    test_sequences: list[list[cpg_sampler.Nucleotide]],
+    test_sequences: list[list[dna.Nucleotide]],
     test_methylations: NDArray[int],
     threshold: float = 0.5,
 ) -> metrics.Metrics:
@@ -189,9 +189,9 @@ def _evaluate_test_performance(
 
 def train_strongly_entangled_qcpg_circuit(
     parameters: NDArray[float],
-    training_sequences: list[list[cpg_sampler.Nucleotide]],
+    training_sequences: list[list[dna.Nucleotide]],
     training_methylations: NDArray[int],
-    test_sequences: list[list[cpg_sampler.Nucleotide]],
+    test_sequences: list[list[dna.Nucleotide]],
     test_methylations: NDArray[int],
     output_file: Path,
     max_steps: int = 50,
@@ -266,11 +266,14 @@ def _train_one_epoch(
     for batch_index, batch_data in enumerate(training_loader):
         inputs, labels = batch_data
         optimizer.zero_grad()
-        outputs: Tensor = model(inputs[0])
-        non_nan_indices = _non_nan_indices(labels[0])
-        loss: Tensor = nn.functional.binary_cross_entropy(
-            outputs[non_nan_indices], labels[0][non_nan_indices]
-        )
+        outputs: Tensor = model(inputs)
+        if len(outputs) > 1:
+            non_nan_indices = _non_nan_indices(labels)
+            loss: Tensor = nn.functional.binary_cross_entropy(
+                outputs[non_nan_indices], labels[non_nan_indices]
+            )
+        else:
+            loss: Tensor = nn.functional.binary_cross_entropy(outputs, labels)
         if training_parameters.l1_regularizer != 0.0:
             loss += training_parameters.l1_regularizer * sum(
                 parameter_vector.abs().sum()
@@ -311,21 +314,19 @@ def _evaluate_validation_set(
     with torch.no_grad():
         for batch_index, validation_data in enumerate(validation_loader):
             inputs, labels = validation_data
-            outputs: Tensor = model(inputs[0])
+            outputs: Tensor = model(inputs)
 
-            non_nan_indices = _non_nan_indices(labels[0])
             true_positive_rate, false_positive_rate, _ = roc_curve(
-                labels[0][non_nan_indices], outputs[non_nan_indices]
+                labels.flatten(), outputs.flatten()
             )
+
             batch_auc: float = auc(false_positive_rate, true_positive_rate)
             if isnan(batch_auc):
                 invalid_auc_count += 0
             else:
                 accumulated_auc += auc(false_positive_rate, true_positive_rate)
 
-            loss: Tensor = nn.functional.binary_cross_entropy(
-                outputs[non_nan_indices], labels[0][non_nan_indices]
-            )
+            loss: Tensor = nn.functional.binary_cross_entropy(outputs, labels)
             if training_parameters.l1_regularizer != 0.0:
                 loss += training_parameters.l1_regularizer * sum(
                     parameter_vector.abs().sum()
@@ -370,7 +371,7 @@ def _train_all_epochs(
 
 def train_qnn_circuit(training_parameters: TrainingParameters) -> None:
     training_loader = DataLoader(
-        cpg_sampler.H5CpGDataset(
+        data.H5CpGDataset(
             [
                 training_parameters.data_directory / f"chr{chromosome}.h5"
                 for chromosome in training_parameters.training_chromosomes
@@ -386,7 +387,7 @@ def train_qnn_circuit(training_parameters: TrainingParameters) -> None:
         logger.info(training_parameters.data_directory / f"chr{chromosome}.h5")
 
     validation_loader = DataLoader(
-        cpg_sampler.H5CpGDataset(
+        data.H5CpGDataset(
             [
                 training_parameters.data_directory / f"chr{chromosome}.h5"
                 for chromosome in training_parameters.validation_chromosomes

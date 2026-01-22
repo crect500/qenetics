@@ -69,9 +69,13 @@ class H5CpGDataset(Dataset):
             self.sequence_length,
             UNIQUE_NUCLEOTIDE_QUANTITY,
             dtype=torch.float,
+            requires_grad=False,
         )
         self.labels = torch.empty(
-            sample_quantity, self.experiment_quantity, dtype=torch.float
+            sample_quantity,
+            self.experiment_quantity,
+            dtype=torch.float,
+            requires_grad=False,
         )
 
     def _fill_tensors(
@@ -86,7 +90,9 @@ class H5CpGDataset(Dataset):
                     ].start : self.chromosome_indices[chromosome].end,
                     :,
                     :,
-                ] = torch.tensor(fd["methylation_sequences"])
+                ] = torch.tensor(
+                    fd["methylation_sequences"], requires_grad=False
+                )
                 for label_index, experiment_name in enumerate(
                     fd["methylation_ratios"].keys()
                 ):
@@ -103,6 +109,7 @@ class H5CpGDataset(Dataset):
                             ]
                         ],
                         dtype=torch.float,
+                        requires_grad=False,
                     )
 
 

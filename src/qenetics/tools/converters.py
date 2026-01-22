@@ -70,7 +70,7 @@ def extract_deepcpg_experiment_to_qcpg(
     logger.info("Found chromosomes %s", str(chromosomes))
     current_data = pl.DataFrame(schema=schema)
     for chromosome in chromosomes:
-        current_data.clear()
+        current_data = current_data.clear()
         deepcpg_filepaths: list[Path] = [
             Path(filepath)
             for filepath in glob(str(deepcpg_directory / f"c{chromosome}_*.h5"))

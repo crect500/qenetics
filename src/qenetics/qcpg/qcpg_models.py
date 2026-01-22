@@ -6,7 +6,10 @@ import pennylane as qml
 from torch import nn, Tensor
 from torch.nn import functional
 
-from qenetics.tools import cpg_sampler
+from qenetics.tools import data
+
+AMPLITUDE_QUBIT_QUANTITY: int = 2
+UNIQUE_ROTATIONS_QUANTITY: int = 3
 
 
 class QNN(nn.Module):
@@ -15,16 +18,16 @@ class QNN(nn.Module):
         sequence_length: int,
         quantum_layer_quantity: int,
         output_quantity: int,
-        entangler: str = "basic",
+        entangler: str = "strong",
     ) -> None:
         super(QNN, self).__init__()
 
         if entangler == "basic":
-            self.qnn = single_basic_entangling_torch(
+            self.qnn = amplitude_basic_entangling_torch(
                 sequence_length, quantum_layer_quantity
             )
         elif entangler == "strong":
-            self.qnn = strongly_entangled_torch(
+            self.qnn = amplitude_strongly_entangling_torch(
                 sequence_length, quantum_layer_quantity
             )
         else:
@@ -34,7 +37,7 @@ class QNN(nn.Module):
 
         wire_quantity: int = (
             calculate_address_register_size(sequence_length)
-            + cpg_sampler.UNIQUE_NUCLEOTIDE_QUANTITY
+            + AMPLITUDE_QUBIT_QUANTITY
         )
         self.linear = nn.Linear(2**wire_quantity, output_quantity)
 
@@ -72,7 +75,7 @@ def calculate_address_register_size(encode_quantity: int) -> int:
     return int(ceil(log2(encode_quantity)))
 
 
-def single_encode_nucleotide(
+def basis_encode_nucleotide(
     nucleotide: Tensor, index: int, address_register_size: int
 ) -> None:
     """
@@ -96,13 +99,13 @@ def single_encode_nucleotide(
         list(
             range(
                 address_register_size,
-                address_register_size + cpg_sampler.UNIQUE_NUCLEOTIDE_QUANTITY,
+                address_register_size + data.UNIQUE_NUCLEOTIDE_QUANTITY,
             )
         ),
     )
 
 
-def single_encode_all_nucleotides(
+def basis_encode_all_nucleotides(
     nucleotides: Tensor,
 ) -> None:
     """
@@ -112,11 +115,14 @@ def single_encode_all_nucleotides(
     ----
     nucleotides: A sequence of enum-mapped nucleotide values.
     """
+    sequence_length: int = nucleotides.shape[1]
     address_register_size: int = calculate_address_register_size(
-        len(nucleotides)
+        sequence_length
     )
-    for index, nucleotide in enumerate(nucleotides):
-        single_encode_nucleotide(nucleotide, index, address_register_size)
+    for index in range(sequence_length):
+        basis_encode_nucleotide(
+            nucleotides[:, index, :], index, address_register_size
+        )
 
 
 def amplitude_encode_nucleotide(
@@ -143,7 +149,7 @@ def amplitude_encode_nucleotide(
         list(
             range(
                 address_register_size,
-                address_register_size + cpg_sampler.UNIQUE_NUCLEOTIDE_QUANTITY,
+                address_register_size + AMPLITUDE_QUBIT_QUANTITY,
             )
         ),
     )
@@ -153,17 +159,20 @@ def amplitude_encode_all_nucleotides(
     nucleotides: Tensor,
 ) -> None:
     """
-    Amplitude encode nucleotide values into a quantum circuit at appropriate addresses.
+    One-hot encode nucleotide values into a quantum circuit at appropriate addresses.
 
     Args
     ----
     nucleotides: A sequence of enum-mapped nucleotide values.
     """
+    sequence_length: int = nucleotides.shape[1]
     address_register_size: int = calculate_address_register_size(
-        len(nucleotides)
+        sequence_length
     )
-    for index, nucleotide in enumerate(nucleotides):
-        amplitude_encode_nucleotide(nucleotide, index, address_register_size)
+    for index in range(sequence_length):
+        amplitude_encode_nucleotide(
+            nucleotides[:, index, :], index, address_register_size
+        )
 
 
 def strongly_entangled_jax(parameters: Tensor) -> None:
@@ -179,18 +188,18 @@ def strongly_entangled_jax(parameters: Tensor) -> None:
         )
 
 
-def single_basic_entangling_torch(
+def basis_basic_entangling_torch(
     sequence_length: int, quantum_layer_quantity: int
 ) -> qml.qnn.TorchLayer:
     wire_quantity: int = (
         calculate_address_register_size(sequence_length)
-        + cpg_sampler.UNIQUE_NUCLEOTIDE_QUANTITY
+        + data.UNIQUE_NUCLEOTIDE_QUANTITY
     )
     device = qml.device("default.qubit", wires=wire_quantity)
 
     @qml.qnode(device)
     def _qnode(inputs: Tensor, weights: Tensor):
-        single_encode_all_nucleotides(inputs)
+        basis_encode_all_nucleotides(inputs)
         qml.BasicEntanglerLayers(weights, wires=list(range(wire_quantity)))
 
         return qml.probs(wires=list(range(wire_quantity)))
@@ -200,18 +209,18 @@ def single_basic_entangling_torch(
     )
 
 
-def strongly_entangled_torch(
+def basis_strongly_entangled_torch(
     sequence_length: int, quantum_layer_quantity: int
 ) -> qml.qnn.TorchLayer:
     wire_quantity: int = (
         calculate_address_register_size(sequence_length)
-        + cpg_sampler.UNIQUE_NUCLEOTIDE_QUANTITY
+        + data.UNIQUE_NUCLEOTIDE_QUANTITY
     )
     device = qml.device("default.qubit", wires=wire_quantity)
 
     @qml.qnode(device)
     def _qnode(inputs: Tensor, weights: Tensor):
-        single_encode_all_nucleotides(inputs)
+        basis_encode_all_nucleotides(inputs)
         qml.StronglyEntanglingLayers(
             weights,
             wires=list(range(wire_quantity)),
@@ -224,6 +233,56 @@ def strongly_entangled_torch(
         {
             "weights": qml.StronglyEntanglingLayers.shape(
                 n_layers=quantum_layer_quantity, n_wires=wire_quantity
+            )
+        },
+    )
+
+
+def amplitude_basic_entangling_torch(
+    sequence_length: int, quantum_layer_quantity: int
+) -> qml.qnn.TorchLayer:
+    wire_quantity: int = (
+        calculate_address_register_size(sequence_length)
+        + AMPLITUDE_QUBIT_QUANTITY
+    )
+    device = qml.device("default.qubit", wires=wire_quantity)
+
+    @qml.qnode(device)
+    def _qnode(inputs: Tensor, weights: Tensor):
+        amplitude_encode_all_nucleotides(inputs)
+        qml.BasicEntanglerLayers(weights, wires=list(range(wire_quantity)))
+
+        return qml.probs(wires=list(range(wire_quantity)))
+
+    return qml.qnn.TorchLayer(
+        qml.transforms.broadcast_expand(_qnode),
+        {"weights": (quantum_layer_quantity, wire_quantity)},
+    )
+
+
+def amplitude_strongly_entangling_torch(
+    sequence_length: int, quantum_layer_quantity: int
+) -> qml.qnn.TorchLayer:
+    wire_quantity: int = (
+        calculate_address_register_size(sequence_length)
+        + AMPLITUDE_QUBIT_QUANTITY
+    )
+    device = qml.device("default.qubit", wires=wire_quantity)
+
+    @qml.qnode(device)
+    def _qnode(inputs: Tensor, weights: Tensor):
+        amplitude_encode_all_nucleotides(inputs)
+        qml.StronglyEntanglingLayers(weights, wires=list(range(wire_quantity)))
+
+        return qml.probs(wires=list(range(wire_quantity)))
+
+    return qml.qnn.TorchLayer(
+        qml.transforms.broadcast_expand(_qnode),
+        {
+            "weights": (
+                quantum_layer_quantity,
+                wire_quantity,
+                UNIQUE_ROTATIONS_QUANTITY,
             )
         },
     )

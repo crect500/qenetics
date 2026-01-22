@@ -2,18 +2,14 @@ from pathlib import Path
 
 import pytest
 
-from qenetics.tools import cpg_sampler
+from qenetics.tools import dna, data
 
 
 @pytest.fixture
-def test_fasta_metadata() -> dict[str, cpg_sampler.SequenceInfo]:
+def test_fasta_metadata() -> dict[str, dna.SequenceInfo]:
     return {
-        "1": cpg_sampler.SequenceInfo(
-            length=44, is_chromosome=True, file_position=50
-        ),
-        "2": cpg_sampler.SequenceInfo(
-            length=88, is_chromosome=True, file_position=145
-        ),
+        "1": dna.SequenceInfo(length=44, is_chromosome=True, file_position=50),
+        "2": dna.SequenceInfo(length=88, is_chromosome=True, file_position=145),
     }
 
 
@@ -58,10 +54,10 @@ def test_single_experiment_dataset_directory() -> Path:
 
 
 @pytest.fixture
-def test_h5_loader() -> cpg_sampler.H5CpGDataset:
-    return cpg_sampler.H5CpGDataset(
+def test_h5_loader() -> data.H5CpGDataset:
+    return data.H5CpGDataset(
         [
-            Path("tests/test_files/test_dataset/chr1.h5"),
-            Path("tests/test_files/test_dataset/chr1.h5"),
+            Path("tests/test_files/test_qcpg_dataset/chr1.h5"),
+            Path("tests/test_files/test_qcpg_dataset/chr2.h5"),
         ]
     )
