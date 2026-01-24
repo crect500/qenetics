@@ -4,6 +4,7 @@ from csv import DictReader
 from dataclasses import dataclass
 from io import TextIOBase
 import logging
+from math import sqrt
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -121,7 +122,11 @@ class H5CpGDataset(Dataset):
                             requires_grad=False,
                         )
                 else:
-                    self.labels = torch.tensor(
+                    self.labels[
+                        self.chromosome_indices[
+                            chromosome
+                        ].start : self.chromosome_indices[chromosome].end
+                    ] = torch.tensor(
                         [
                             0 if methylation_ratio < threshold else 1
                             for methylation_ratio in fd["methylation_ratios"]
@@ -131,7 +136,9 @@ class H5CpGDataset(Dataset):
                     )
 
 
-def nucleotide_character_to_numpy(nucleotide: str) -> NDArray[int]:
+def nucleotide_character_to_numpy(
+    nucleotide: str, encoding: str = "basis"
+) -> NDArray[int]:
     """
     Convert a nucleotide designator to a one-hot array.
 
@@ -152,7 +159,11 @@ def nucleotide_character_to_numpy(nucleotide: str) -> NDArray[int]:
     if nucleotide == "G":
         return np.array([0, 0, 0, 1], dtype=int)
     if nucleotide == "N":
-        return np.array([0, 0, 0, 0], dtype=int)
+        if encoding == "amplitude":
+            equal_superposition: float = 1 / sqrt(2)
+            return np.array([equal_superposition] * 4, dtype=float)
+        else:
+            return np.array([0, 0, 0, 0], dtype=int)
 
     raise ValueError(f"{nucleotide} is not a valid nucleotide designator")
 

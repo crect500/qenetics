@@ -120,6 +120,14 @@ def _parse_script_args() -> Namespace:
         help="The L2 (Ridge) regularization lambda value.",
     )
     parser.add_argument(
+        "--batch_size",
+        dest="batch_size",
+        required=False,
+        default=128,
+        type=int,
+        help="The training batch size.",
+    )
+    parser.add_argument(
         "--log-directory",
         dest="log_directory",
         required=False,
@@ -146,6 +154,7 @@ if __name__ == "__main__":
             entangler=args.entangler,
             layer_quantity=args.layer_quantity,
             epochs=args.max_iterations,
+            batch_size=args.batch_size,
             learning_rate=args.learning_rate,
             l1_regularizer=args.l1_regularization,
             l2_regularizer=args.l2_regularization,

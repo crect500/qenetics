@@ -267,13 +267,15 @@ def _train_one_epoch(
         inputs, labels = batch_data
         optimizer.zero_grad()
         outputs: Tensor = model(inputs)
-        if len(outputs) > 1:
+        if len(labels.shape) > 1:
             non_nan_indices = _non_nan_indices(labels)
             loss: Tensor = nn.functional.binary_cross_entropy(
                 outputs[non_nan_indices], labels[non_nan_indices]
             )
         else:
-            loss: Tensor = nn.functional.binary_cross_entropy(outputs, labels)
+            loss: Tensor = nn.functional.binary_cross_entropy(
+                outputs.squeeze(), labels
+            )
         if training_parameters.l1_regularizer != 0.0:
             loss += training_parameters.l1_regularizer * sum(
                 parameter_vector.abs().sum()
@@ -326,7 +328,15 @@ def _evaluate_validation_set(
             else:
                 accumulated_auc += auc(false_positive_rate, true_positive_rate)
 
-            loss: Tensor = nn.functional.binary_cross_entropy(outputs, labels)
+            if len(labels.shape) > 1:
+                loss: Tensor = nn.functional.binary_cross_entropy(
+                    outputs, labels
+                )
+            else:
+                loss: Tensor = nn.functional.binary_cross_entropy(
+                    outputs.squeeze(), labels
+                )
+
             if training_parameters.l1_regularizer != 0.0:
                 loss += training_parameters.l1_regularizer * sum(
                     parameter_vector.abs().sum()

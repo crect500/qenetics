@@ -130,14 +130,16 @@ def test_evaluate_validation_set(
         )
 
 
-def test_train_qnn_circuit(test_qcpg_dataset_directory: Path) -> None:
+def test_train_qnn_circuit(
+    test_single_amplitude_dataset_directory: Path,
+) -> None:
     with TemporaryDirectory() as temp_dir:
         training_parameters = qcpg.TrainingParameters(
-            data_directory=test_qcpg_dataset_directory,
+            data_directory=test_single_amplitude_dataset_directory,
             output_filepath=Path(temp_dir) / "output.dat",
             training_chromosomes=["1", "2"],
             validation_chromosomes=["1", "2"],
-            batch_size=1,
+            batch_size=2,
             epochs=2,
         )
         qcpg.train_qnn_circuit(training_parameters)
