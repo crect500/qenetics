@@ -37,7 +37,7 @@ class TrainingParameters:
     l1_regularizer: float = 0.0
     l2_regularizer: float = 0.0
     batch_size: int = 128
-    report_every: int = 1000
+    report_every: int = 1
     model_filepath: Path | None = None
 
 
@@ -297,7 +297,10 @@ def _train_one_epoch(
         ):
             return_loss = accumulated_loss / training_parameters.report_every
             logger.info(
-                f"Epoch {epoch} - Batch {batch_index} loss: {return_loss}"
+                "Epoch %d - Batch %d loss: %.4f",
+                epoch,
+                batch_index,
+                return_loss,
             )
             accumulated_loss = 0.0
 

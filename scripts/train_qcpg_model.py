@@ -120,7 +120,7 @@ def _parse_script_args() -> Namespace:
         help="The L2 (Ridge) regularization lambda value.",
     )
     parser.add_argument(
-        "--batch_size",
+        "--batch-size",
         dest="batch_size",
         required=False,
         default=128,
@@ -135,15 +135,29 @@ def _parse_script_args() -> Namespace:
         default=None,
         help="The filepath to the desired log directory",
     )
+    parser.add_argument(
+        "--log-level",
+        dest="log_level",
+        type=str,
+        required=False,
+        default="info",
+        help="The log level for the current script.",
+    )
 
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args: Namespace = _parse_script_args()
+    if args.log_level == "debug":
+        log_level: int = logging.DEBUG
+    else:
+        log_level = logging.INFO
     if args.log_directory:
         logging.basicConfig(
-            filename=args.log_directory / "qcpg_train.log", level=logging.INFO
+            filename=args.log_directory / "qcpg_train.log",
+            level=log_level,
+            format="%(asctime)s - %(levelname)s - %(message)s",
         )
     qcpg.train_qnn_circuit(
         qcpg.TrainingParameters(

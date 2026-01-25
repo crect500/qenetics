@@ -66,6 +66,11 @@ class H5CpGDataset(Dataset):
                 self.chromosome_indices[filepath.stem[3:]] = ChromosomeIndices(
                     start=sample_quantity, end=new_sample_quantity
                 )
+                logger.debug(
+                    "Found %d samples in file %s",
+                    new_sample_quantity - sample_quantity,
+                    str(filepath),
+                )
                 sample_quantity = new_sample_quantity
 
         self.data = torch.empty(
@@ -86,13 +91,15 @@ class H5CpGDataset(Dataset):
             self.labels = torch.empty(
                 sample_quantity, dtype=torch.float, requires_grad=False
             )
+        logger.debug("Initialized dataset with %d samples", sample_quantity)
 
     def _fill_tensors(
         self: H5CpGDataset, filepaths: list[Path], threshold: float = 0.5
     ) -> None:
         for filepath in filepaths:
             chromosome: str = filepath.stem[3:]
-            with h5py.File(filepath) as fd:
+            logger.debug("Loading data from %s", str(filepath))
+            with h5py.File(filepath) as dataset:
                 self.data[
                     self.chromosome_indices[
                         chromosome
@@ -100,11 +107,13 @@ class H5CpGDataset(Dataset):
                     :,
                     :,
                 ] = torch.tensor(
-                    fd["methylation_sequences"], requires_grad=False
+                    dataset["methylation_sequences"],
+                    dtype=torch.float,
+                    requires_grad=False,
                 )
                 if self.experiment_quantity > 1:
                     for label_index, experiment_name in enumerate(
-                        fd["methylation_ratios"].keys()
+                        dataset["methylation_ratios"].keys()
                     ):
                         self.labels[
                             self.chromosome_indices[
@@ -112,12 +121,7 @@ class H5CpGDataset(Dataset):
                             ].start : self.chromosome_indices[chromosome].end,
                             label_index,
                         ] = torch.tensor(
-                            [
-                                0 if methylation_ratio < threshold else 1
-                                for methylation_ratio in fd[
-                                    "methylation_ratios"
-                                ][experiment_name]
-                            ],
+                            dataset["methylation_ratios"][experiment_name],
                             dtype=torch.float,
                             requires_grad=False,
                         )
@@ -127,13 +131,13 @@ class H5CpGDataset(Dataset):
                             chromosome
                         ].start : self.chromosome_indices[chromosome].end
                     ] = torch.tensor(
-                        [
-                            0 if methylation_ratio < threshold else 1
-                            for methylation_ratio in fd["methylation_ratios"]
-                        ],
+                        dataset["methylation_ratios"],
                         dtype=torch.float,
                         requires_grad=False,
                     )
+
+                self.labels[self.labels < threshold] = 0.0
+                self.labels[self.labels > 0.0] = 1.0
 
 
 def nucleotide_character_to_numpy(
