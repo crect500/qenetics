@@ -1,7 +1,9 @@
 from dataclasses import dataclass, field
 import logging
 from math import isnan
+import os
 from pathlib import Path
+import socket
 
 import jax
 import torch
@@ -12,8 +14,11 @@ import optax
 import pennylane as qml
 from sklearn.metrics import auc, roc_curve
 from torch import nn, optim, Tensor
+from torch.distributed import init_process_group, destroy_process_group
+import torch.multiprocessing as mp
+from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader
-
+from torch.utils.data.distributed import DistributedSampler
 from qenetics.qcpg import qcpg_models
 from qenetics.tools import data, dna, metrics
 
@@ -38,7 +43,38 @@ class TrainingParameters:
     l2_regularizer: float = 0.0
     batch_size: int = 128
     report_every: int = 1
+    distributed: bool = True
     model_filepath: Path | None = None
+
+
+def _get_free_port() -> int:
+    """
+    Finds and returns a free port on the server.
+
+    Returns
+    -------
+    The free port number.
+
+    """
+    free_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    free_socket.bind(("", 0))
+    return free_socket.getsockname()[1]
+
+
+def _ddp_setup(rank: int, world_size: int) -> None:
+    """
+    Set up the Torch Cuda multiprocessing environment.
+
+    Args
+    ----
+    rank: The rank of the device.
+    world_size: The number of devices in the processing group.
+
+    """
+    os.environ["MASTER_ADDR"] = "localhost"
+    os.environ["MASTER_PORT"] = str(_get_free_port())
+    torch.cuda.set_device(rank)
+    init_process_group(backend="nccl", rank=rank, world_size=world_size)
 
 
 def _strongly_entangled_run_circuit(
@@ -252,6 +288,67 @@ def _non_nan_indices(truth: Tensor) -> list[int]:
     return indices
 
 
+def _prepare_training(
+    training_parameters: TrainingParameters, rank: int | None = None
+) -> tuple[
+    DataLoader, DataLoader, qcpg_models.QNN | DistributedDataParallel, optim.SGD
+]:
+    training_dataset = data.H5CpGDataset(
+        [
+            training_parameters.data_directory / f"chr{chromosome}.h5"
+            for chromosome in training_parameters.training_chromosomes
+        ]
+    )
+    logger.info(f"Loaded {len(training_dataset)} samples from training files:")
+    validation_dataset = data.H5CpGDataset(
+        [
+            training_parameters.data_directory / f"chr{chromosome}.h5"
+            for chromosome in training_parameters.validation_chromosomes
+        ]
+    )
+    logger.info(
+        f"Loading {len(validation_dataset)} samples from validation files:"
+    )
+    sequence_length: int = training_dataset.data.shape[1]
+    output_shape: int = training_dataset.experiment_quantity
+    model: qcpg_models.QNN | DistributedDataParallel = qcpg_models.QNN(
+        sequence_length,
+        training_parameters.layer_quantity,
+        output_shape,
+        entangler=training_parameters.entangler,
+    )
+    if rank is not None:
+        training_sampler: DistributedSampler | None = DistributedSampler(
+            training_dataset
+        )
+        validation_sampler: DistributedSampler | None = DistributedSampler(
+            validation_dataset
+        )
+        model = DistributedDataParallel(model, device_ids=[rank])
+    else:
+        training_sampler = None
+        validation_sampler = None
+
+    training_loader = DataLoader(
+        dataset=training_dataset,
+        batch_size=training_parameters.batch_size,
+        shuffle=False,
+        sampler=training_sampler,
+    )
+    validation_loader = DataLoader(
+        dataset=validation_dataset,
+        batch_size=training_parameters.batch_size,
+        shuffle=False,
+        sampler=validation_sampler,
+    )
+    return (
+        training_loader,
+        validation_loader,
+        model,
+        optim.SGD(model.parameters(), lr=training_parameters.learning_rate),
+    )
+
+
 def _train_one_epoch(
     model: nn.Module,
     epoch: int,
@@ -360,12 +457,13 @@ def _evaluate_validation_set(
 
 
 def _train_all_epochs(
-    model: nn.Module,
+    model: nn.Module | DistributedDataParallel,
     training_loader: DataLoader,
     validation_loader: DataLoader,
     optimizer: optim.Optimizer,
     output_filepath: Path,
     training_parameters: TrainingParameters,
+    rank: int | None = None,
 ) -> None:
     for epoch in range(training_parameters.epochs):
         logger.info(f"Training epoch {epoch}")
@@ -379,62 +477,15 @@ def _train_all_epochs(
             f"Epoch {epoch} Training loss: {average_training_loss}, Validation loss: "
             f"{average_validation_loss}, Validation AUC: {average_auc}"
         )
-        torch.save(model.state_dict(), output_filepath)
+        if rank is None:
+            torch.save(model.state_dict(), output_filepath)
+        elif rank == 0:
+            torch.save(model.module.state_dict(), output_filepath)
 
 
 def train_qnn_circuit(training_parameters: TrainingParameters) -> None:
-    training_loader = DataLoader(
-        data.H5CpGDataset(
-            [
-                training_parameters.data_directory / f"chr{chromosome}.h5"
-                for chromosome in training_parameters.training_chromosomes
-            ]
-        ),
-        batch_size=training_parameters.batch_size,
-    )
-
-    logger.info(
-        f"Loaded {len(training_loader.dataset)} samples from training files:"
-    )
-    for chromosome in training_parameters.training_chromosomes:
-        logger.info(training_parameters.data_directory / f"chr{chromosome}.h5")
-
-    validation_loader = DataLoader(
-        data.H5CpGDataset(
-            [
-                training_parameters.data_directory / f"chr{chromosome}.h5"
-                for chromosome in training_parameters.validation_chromosomes
-            ]
-        ),
-        batch_size=training_parameters.batch_size,
-    )
-    logger.info(
-        f"Loading {len(validation_loader.dataset)} samples from validation files:"
-    )
-    for chromosome in training_parameters.validation_chromosomes:
-        logger.info(training_parameters.data_directory / f"chr{chromosome}.h5")
-
-    logger.info("Using the following training parameters:")
-    logger.info("\tEntangler: %s", training_parameters.entangler)
-    logger.info("\tLayer quantity: %d", training_parameters.layer_quantity)
-    logger.info("\tLearning rate: %f", training_parameters.learning_rate)
-    logger.info("\tEpochs: %d", training_parameters.epochs)
-    logger.info("\tL1 regularization: %f", training_parameters.l1_regularizer)
-    logger.info("\tL2 regularization: %f", training_parameters.l2_regularizer)
-
-    sequence_length: int = training_loader.dataset.data.shape[1]
-    output_shape: int = training_loader.dataset.experiment_quantity
-    model = qcpg_models.QNN(
-        sequence_length,
-        training_parameters.layer_quantity,
-        output_shape,
-        entangler=training_parameters.entangler,
-    )
-    if training_parameters.model_filepath is not None:
-        model.load_state_dict(torch.load(training_parameters.model_filepath))
-
-    optimizer = optim.SGD(
-        model.parameters(), lr=training_parameters.learning_rate
+    training_loader, validation_loader, model, optimizer = _prepare_training(
+        training_parameters
     )
     _train_all_epochs(
         model=model,
@@ -443,4 +494,41 @@ def train_qnn_circuit(training_parameters: TrainingParameters) -> None:
         optimizer=optimizer,
         output_filepath=training_parameters.output_filepath,
         training_parameters=training_parameters,
+    )
+
+
+def single_distributed_gpu_train_qcpg_circuit(
+    rank: int, world_size: int, training_parameters: TrainingParameters
+) -> None:
+    _ddp_setup(rank, world_size)
+    training_loader, validation_loader, model, optimizer = _prepare_training(
+        training_parameters, rank=rank
+    )
+    _train_all_epochs(
+        model=model,
+        training_loader=training_loader,
+        validation_loader=validation_loader,
+        optimizer=optimizer,
+        output_filepath=training_parameters.output_filepath,
+        training_parameters=training_parameters,
+        rank=rank,
+    )
+    destroy_process_group()
+
+
+def multi_gpu_train_qcpq_circuit(
+    training_parameters: TrainingParameters,
+) -> None:
+    logger.info("Using the following training parameters:")
+    logger.info("\tEntangler: %s", training_parameters.entangler)
+    logger.info("\tLayer quantity: %d", training_parameters.layer_quantity)
+    logger.info("\tLearning rate: %f", training_parameters.learning_rate)
+    logger.info("\tEpochs: %d", training_parameters.epochs)
+    logger.info("\tL1 regularization: %f", training_parameters.l1_regularizer)
+    logger.info("\tL2 regularization: %f", training_parameters.l2_regularizer)
+    world_size: int = torch.cuda.device_count()
+    mp.spawn(
+        single_distributed_gpu_train_qcpg_circuit,
+        args=(world_size, training_parameters),
+        nprocs=world_size,
     )

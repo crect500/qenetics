@@ -18,6 +18,20 @@ def test_calculate_address_register_size(
 
 
 @pytest.mark.parametrize(
+    ("device_name", "distribute"), [("default.qubit", False)]
+)
+def test_device_setup(device_name: str, distribute: bool) -> None:
+    wire_quantity: int = 2
+    device: qml.devices.Device = qcpg_models._device_setup(
+        device_name, wire_quantity, distribute
+    )
+    if device_name == "default.qubit":
+        assert isinstance(device, qml.devices.DefaultQubit)
+    elif device_name == "lightning.gpu":
+        assert isinstance(device, qml.devices.LightningGPU)
+
+
+@pytest.mark.parametrize(
     ("nucleotide_value", "index"),
     [
         ("A", 0),
@@ -272,32 +286,76 @@ def test_basis_strongly_entangled_torch(
     )
 
 
-def test_QNN() -> None:
+@pytest.mark.parametrize(
+    ("entangler", "encoding", "device_name", "distribute"),
+    [
+        ("strong", "amplitude", "default.qubit", False),
+        ("invalid", "amplitude", "default.qubit", False),
+        ("strong", "invalid", "default.qubit", False),
+    ],
+)
+def test_QNN(
+    entangler: str, encoding: str, device_name: str, distribute: bool
+) -> None:
     sequence_length: int = 8
     output_quantity: int = 4
-    model = qcpg_models.QNN(
-        sequence_length=sequence_length,
-        quantum_layer_quantity=2,
-        output_quantity=output_quantity,
-        entangler="basic",
-    )
-    model.train(True)
-    single_input: torch.Tensor = torch.tensor(
-        [data.nucleotide_string_to_numpy("ATCGATCG")], requires_grad=False
-    )
-    single_input[single_input < 0.5] = 0
-    single_input[single_input > 0.0] = 1
-    single_input = torch.tensor(single_input, dtype=torch.float)
-    output: torch.Tensor = model(single_input)
-    assert output.shape == (1, 4)
+    if entangler == "invalid":
+        with pytest.raises(
+            ValueError, match=r"Entangler invalid not recognized or supported."
+        ):
+            _ = qcpg_models.QNN(
+                sequence_length=sequence_length,
+                quantum_layer_quantity=2,
+                output_quantity=output_quantity,
+                entangler=entangler,
+                encoding=encoding,
+                device_name=device_name,
+                distribute=distribute,
+            )
+    elif encoding == "invalid":
+        with pytest.raises(
+            ValueError,
+            match=r"Encoding method invalid not recognized or supported.",
+        ):
+            _ = qcpg_models.QNN(
+                sequence_length=sequence_length,
+                quantum_layer_quantity=2,
+                output_quantity=output_quantity,
+                entangler=entangler,
+                encoding=encoding,
+                device_name=device_name,
+                distribute=distribute,
+            )
+    else:
+        model = qcpg_models.QNN(
+            sequence_length=sequence_length,
+            quantum_layer_quantity=2,
+            output_quantity=output_quantity,
+            entangler=entangler,
+            encoding=encoding,
+            device_name=device_name,
+            distribute=distribute,
+        )
+        model.train(True)
+        single_input: torch.Tensor = torch.tensor(
+            [data.nucleotide_string_to_numpy("ATCGATCG")], requires_grad=False
+        )
+        single_input[single_input < 0.5] = 0
+        single_input[single_input > 0.0] = 1
+        single_input = torch.tensor(single_input, dtype=torch.float)
+        output: torch.Tensor = model(single_input)
+        assert output.shape == (1, 4)
 
-    sequences: list[str] = ["ATCGATCG", "AATTCCGG", "GGCCTTAA", "GCTAGCTA"]
-    multiple_input: torch.Tensor = torch.tensor(
-        [data.nucleotide_string_to_numpy(sequence) for sequence in sequences],
-        requires_grad=False,
-    )
-    multiple_input[multiple_input < 0.5] = 0
-    multiple_input[multiple_input > 0.0] = 1
-    multiple_input = torch.tensor(multiple_input, dtype=torch.float)
-    output: torch.Tensor = model(multiple_input)
-    assert output.shape == (4, 4)
+        sequences: list[str] = ["ATCGATCG", "AATTCCGG", "GGCCTTAA", "GCTAGCTA"]
+        multiple_input: torch.Tensor = torch.tensor(
+            [
+                data.nucleotide_string_to_numpy(sequence)
+                for sequence in sequences
+            ],
+            requires_grad=False,
+        )
+        multiple_input[multiple_input < 0.5] = 0
+        multiple_input[multiple_input > 0.0] = 1
+        multiple_input = torch.tensor(multiple_input, dtype=torch.float)
+        output: torch.Tensor = model(multiple_input)
+        assert output.shape == (4, 4)

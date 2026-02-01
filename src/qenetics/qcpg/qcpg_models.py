@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from math import ceil, log2
+from typing import Self
 
 import pennylane as qml
 from torch import nn, Tensor
@@ -19,21 +20,20 @@ class QNN(nn.Module):
         quantum_layer_quantity: int,
         output_quantity: int,
         entangler: str = "strong",
+        encoding: str = "amplitude",
+        device_name: str = "default.qubit",
+        distribute: bool = True,
     ) -> None:
         super(QNN, self).__init__()
 
-        if entangler == "basic":
-            self.qnn = amplitude_basic_entangling_torch(
-                sequence_length, quantum_layer_quantity
-            )
-        elif entangler == "strong":
-            self.qnn = amplitude_strongly_entangling_torch(
-                sequence_length, quantum_layer_quantity
-            )
-        else:
-            raise ValueError(
-                f"Entangler specified not recognized: {entangler}."
-            )
+        self.set_quantum_layer(
+            encoding,
+            entangler,
+            device_name,
+            sequence_length,
+            quantum_layer_quantity,
+            distribute,
+        )
 
         wire_quantity: int = (
             calculate_address_register_size(sequence_length)
@@ -48,6 +48,44 @@ class QNN(nn.Module):
         output: Tensor = functional.sigmoid(x)
 
         return output
+
+    def set_quantum_layer(
+        self: Self,
+        encoding: str,
+        entangler: str,
+        device_name: str,
+        sequence_length: int,
+        quantum_layer_quantity: int,
+        distribute: bool,
+    ) -> None:
+        if entangler == "basic":
+            if encoding == "amplitude":
+                self.qnn = amplitude_basic_entangling_torch(
+                    sequence_length,
+                    quantum_layer_quantity,
+                    device_name,
+                    distribute,
+                )
+            else:
+                raise ValueError(
+                    f"Encoding method {encoding} not recognized or supported."
+                )
+        elif entangler == "strong":
+            if encoding == "amplitude":
+                self.qnn = amplitude_strongly_entangling_torch(
+                    sequence_length,
+                    quantum_layer_quantity,
+                    device_name,
+                    distribute,
+                )
+            else:
+                raise ValueError(
+                    f"Encoding method {encoding} not recognized or supported."
+                )
+        else:
+            raise ValueError(
+                f"Entangler {entangler} not recognized or supported."
+            )
 
 
 def calculate_address_register_size(encode_quantity: int) -> int:
@@ -188,14 +226,30 @@ def strongly_entangled_jax(parameters: Tensor) -> None:
         )
 
 
+def _device_setup(
+    device_name: str, wire_quantity: int, distribute: bool = False
+) -> qml.devices.Device:
+    if device_name == "default.qubit":
+        return qml.device(device_name, wires=wire_quantity)
+
+    if device_name == "lightning.gpu":
+        if distribute:
+            return qml.device(device_name, wires=wire_quantity, batch_obs=True)
+        else:
+            return qml.device(device_name, wires=wire_quantity, batch_obs=False)
+
+
 def basis_basic_entangling_torch(
-    sequence_length: int, quantum_layer_quantity: int
+    sequence_length: int,
+    quantum_layer_quantity: int,
+    device_name: str = "default.qubit",
+    distribute: bool = False,
 ) -> qml.qnn.TorchLayer:
     wire_quantity: int = (
         calculate_address_register_size(sequence_length)
         + data.UNIQUE_NUCLEOTIDE_QUANTITY
     )
-    device = qml.device("default.qubit", wires=wire_quantity)
+    device = _device_setup(device_name, wire_quantity, distribute)
 
     @qml.qnode(device)
     def _qnode(inputs: Tensor, weights: Tensor):
@@ -210,13 +264,16 @@ def basis_basic_entangling_torch(
 
 
 def basis_strongly_entangled_torch(
-    sequence_length: int, quantum_layer_quantity: int
+    sequence_length: int,
+    quantum_layer_quantity: int,
+    device_name: str = "default.qubit",
+    distribute: bool = False,
 ) -> qml.qnn.TorchLayer:
     wire_quantity: int = (
         calculate_address_register_size(sequence_length)
         + data.UNIQUE_NUCLEOTIDE_QUANTITY
     )
-    device = qml.device("default.qubit", wires=wire_quantity)
+    device = _device_setup(device_name, wire_quantity, distribute)
 
     @qml.qnode(device)
     def _qnode(inputs: Tensor, weights: Tensor):
@@ -239,13 +296,16 @@ def basis_strongly_entangled_torch(
 
 
 def amplitude_basic_entangling_torch(
-    sequence_length: int, quantum_layer_quantity: int
+    sequence_length: int,
+    quantum_layer_quantity: int,
+    device_name: str = "default.qubit",
+    distribute: bool = False,
 ) -> qml.qnn.TorchLayer:
     wire_quantity: int = (
         calculate_address_register_size(sequence_length)
         + AMPLITUDE_QUBIT_QUANTITY
     )
-    device = qml.device("default.qubit", wires=wire_quantity)
+    device = _device_setup(device_name, wire_quantity, distribute)
 
     @qml.qnode(device)
     def _qnode(inputs: Tensor, weights: Tensor):
@@ -261,13 +321,16 @@ def amplitude_basic_entangling_torch(
 
 
 def amplitude_strongly_entangling_torch(
-    sequence_length: int, quantum_layer_quantity: int
+    sequence_length: int,
+    quantum_layer_quantity: int,
+    device_name: str = "default.qubit",
+    distribute: bool = False,
 ) -> qml.qnn.TorchLayer:
     wire_quantity: int = (
         calculate_address_register_size(sequence_length)
         + AMPLITUDE_QUBIT_QUANTITY
     )
-    device = qml.device("default.qubit", wires=wire_quantity)
+    device = _device_setup(device_name, wire_quantity, distribute)
 
     @qml.qnode(device)
     def _qnode(inputs: Tensor, weights: Tensor):

@@ -13,6 +13,27 @@ from qenetics.tools import data
 UNIQUE_NUCLEOTIDE_QUANTITY: int = 4
 
 
+def test_get_free_port() -> None:
+    qcpg._get_free_port()
+
+
+def test_prepare_training(
+    test_single_amplitude_dataset_directory: Path,
+) -> None:
+    with TemporaryDirectory() as temp_dir:
+        training_parameters = qcpg.TrainingParameters(
+            data_directory=test_single_amplitude_dataset_directory,
+            output_filepath=Path(temp_dir) / "output.dat",
+            training_chromosomes=["1", "2"],
+            validation_chromosomes=["1", "2"],
+            batch_size=2,
+            epochs=2,
+        )
+    training_loader, validation_loader, model, optimizer = (
+        qcpg._prepare_training(training_parameters)
+    )
+
+
 @pytest.mark.parametrize(
     ("truth", "expected_indices"),
     [([0.0], [0]), ([0.0, nan], [0]), ([nan, 1.0], [1])],
