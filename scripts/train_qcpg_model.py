@@ -143,6 +143,9 @@ def _parse_script_args() -> Namespace:
         default="info",
         help="The log level for the current script.",
     )
+    parser.add_argument(
+        "--gpu", dest="use_gpu", action="store_true", required=False
+    )
 
     return parser.parse_args()
 
@@ -159,19 +162,37 @@ if __name__ == "__main__":
             level=log_level,
             format="%(asctime)s - %(levelname)s - %(message)s",
         )
-    qcpg.train_qnn_circuit(
-        qcpg.TrainingParameters(
-            data_directory=args.data_directory,
-            output_filepath=args.output_filepath,
-            training_chromosomes=args.training_chromosomes,
-            validation_chromosomes=args.validation_chromosomes,
-            entangler=args.entangler,
-            layer_quantity=args.layer_quantity,
-            epochs=args.max_iterations,
-            batch_size=args.batch_size,
-            learning_rate=args.learning_rate,
-            l1_regularizer=args.l1_regularization,
-            l2_regularizer=args.l2_regularization,
-            model_filepath=args.model_filepath,
+    if not args.use_gpu:
+        qcpg.train_qnn_circuit(
+            qcpg.TrainingParameters(
+                data_directory=args.data_directory,
+                output_filepath=args.output_filepath,
+                training_chromosomes=args.training_chromosomes,
+                validation_chromosomes=args.validation_chromosomes,
+                entangler=args.entangler,
+                layer_quantity=args.layer_quantity,
+                epochs=args.max_iterations,
+                batch_size=args.batch_size,
+                learning_rate=args.learning_rate,
+                l1_regularizer=args.l1_regularization,
+                l2_regularizer=args.l2_regularization,
+                model_filepath=args.model_filepath,
+            )
         )
-    )
+    else:
+        qcpg.multi_gpu_train_qcpq_circuit(
+            qcpg.TrainingParameters(
+                data_directory=args.data_directory,
+                output_filepath=args.output_filepath,
+                training_chromosomes=args.training_chromosomes,
+                validation_chromosomes=args.validation_chromosomes,
+                entangler=args.entangler,
+                layer_quantity=args.layer_quantity,
+                epochs=args.max_iterations,
+                batch_size=args.batch_size,
+                learning_rate=args.learning_rate,
+                l1_regularizer=args.l1_regularization,
+                l2_regularizer=args.l2_regularization,
+                model_filepath=args.model_filepath,
+            )
+        )

@@ -484,6 +484,13 @@ def _train_all_epochs(
 
 
 def train_qnn_circuit(training_parameters: TrainingParameters) -> None:
+    logger.info("Using the following training parameters:")
+    logger.info("\tEntangler: %s", training_parameters.entangler)
+    logger.info("\tLayer quantity: %d", training_parameters.layer_quantity)
+    logger.info("\tLearning rate: %f", training_parameters.learning_rate)
+    logger.info("\tEpochs: %d", training_parameters.epochs)
+    logger.info("\tL1 regularization: %f", training_parameters.l1_regularizer)
+    logger.info("\tL2 regularization: %f", training_parameters.l2_regularizer)
     training_loader, validation_loader, model, optimizer = _prepare_training(
         training_parameters
     )
@@ -501,9 +508,11 @@ def single_distributed_gpu_train_qcpg_circuit(
     rank: int, world_size: int, training_parameters: TrainingParameters
 ) -> None:
     _ddp_setup(rank, world_size)
+    logger.info("Setting up training on GPU %d", rank)
     training_loader, validation_loader, model, optimizer = _prepare_training(
         training_parameters, rank=rank
     )
+    logger.info("Finished training setup on GPU %d", rank)
     _train_all_epochs(
         model=model,
         training_loader=training_loader,
@@ -527,6 +536,7 @@ def multi_gpu_train_qcpq_circuit(
     logger.info("\tL1 regularization: %f", training_parameters.l1_regularizer)
     logger.info("\tL2 regularization: %f", training_parameters.l2_regularizer)
     world_size: int = torch.cuda.device_count()
+    logger.info("Found %d GPUs", world_size)
     mp.spawn(
         single_distributed_gpu_train_qcpg_circuit,
         args=(world_size, training_parameters),
