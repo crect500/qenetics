@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from math import ceil, log2
-from typing import Self
 
 import pennylane as qml
 from torch import nn, Tensor
@@ -50,7 +49,7 @@ class QNN(nn.Module):
         return output
 
     def set_quantum_layer(
-        self: Self,
+        self: "QNN",
         encoding: str,
         entangler: str,
         device_name: str,

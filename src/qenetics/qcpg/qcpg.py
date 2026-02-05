@@ -45,6 +45,8 @@ class TrainingParameters:
     report_every: int = 1
     distributed: bool = True
     model_filepath: Path | None = None
+    log_directory: Path | None = None
+    log_level = logging.INFO
 
 
 def _get_free_port() -> int:
@@ -61,7 +63,7 @@ def _get_free_port() -> int:
     return free_socket.getsockname()[1]
 
 
-def _ddp_setup(rank: int, world_size: int) -> None:
+def _ddp_setup(rank: int, world_size: int, master_port: int) -> None:
     """
     Set up the Torch Cuda multiprocessing environment.
 
@@ -72,7 +74,7 @@ def _ddp_setup(rank: int, world_size: int) -> None:
 
     """
     os.environ["MASTER_ADDR"] = "localhost"
-    os.environ["MASTER_PORT"] = str(_get_free_port())
+    os.environ["MASTER_PORT"] = str(master_port)
     torch.cuda.set_device(rank)
     init_process_group(backend="nccl", rank=rank, world_size=world_size)
 
@@ -299,7 +301,8 @@ def _prepare_training(
             for chromosome in training_parameters.training_chromosomes
         ]
     )
-    logger.info(f"Loaded {len(training_dataset)} samples from training files:")
+    logger.info("Loaded %d samples from training files", len(training_dataset))
+    logger.debug("Training set shape %s", str(training_dataset.data.shape))
     validation_dataset = data.H5CpGDataset(
         [
             training_parameters.data_directory / f"chr{chromosome}.h5"
@@ -307,8 +310,11 @@ def _prepare_training(
         ]
     )
     logger.info(
-        f"Loading {len(validation_dataset)} samples from validation files:"
+        logger.info(
+            "Loaded %d samples from validation files", len(validation_dataset)
+        )
     )
+    logger.debug("Validation set shape %s", str(validation_dataset.data.shape))
     sequence_length: int = training_dataset.data.shape[1]
     output_shape: int = training_dataset.experiment_quantity
     model: qcpg_models.QNN | DistributedDataParallel = qcpg_models.QNN(
@@ -324,6 +330,7 @@ def _prepare_training(
         validation_sampler: DistributedSampler | None = DistributedSampler(
             validation_dataset
         )
+        model = model.to(rank)
         model = DistributedDataParallel(model, device_ids=[rank])
     else:
         training_sampler = None
@@ -484,6 +491,11 @@ def _train_all_epochs(
 
 
 def train_qnn_circuit(training_parameters: TrainingParameters) -> None:
+    logging.basicConfig(
+        filename=training_parameters.log_directory / "qcpg_train.log",
+        level=training_parameters.log_level,
+        format="(asctime)s - %(levelname)s - %(message)s",
+    )
     logger.info("Using the following training parameters:")
     logger.info("\tEntangler: %s", training_parameters.entangler)
     logger.info("\tLayer quantity: %d", training_parameters.layer_quantity)
@@ -505,9 +517,17 @@ def train_qnn_circuit(training_parameters: TrainingParameters) -> None:
 
 
 def single_distributed_gpu_train_qcpg_circuit(
-    rank: int, world_size: int, training_parameters: TrainingParameters
+    rank: int,
+    world_size: int,
+    master_port: int,
+    training_parameters: TrainingParameters,
 ) -> None:
-    _ddp_setup(rank, world_size)
+    _ddp_setup(rank, world_size, master_port)
+    logging.basicConfig(
+        filename=training_parameters.log_directory / "qcpg_train.log",
+        level=training_parameters.log_level,
+        format=f"[Rank {rank}] " + "%(asctime)s - %(levelname)s - %(message)s",
+    )
     logger.info("Setting up training on GPU %d", rank)
     training_loader, validation_loader, model, optimizer = _prepare_training(
         training_parameters, rank=rank
@@ -528,6 +548,11 @@ def single_distributed_gpu_train_qcpg_circuit(
 def multi_gpu_train_qcpq_circuit(
     training_parameters: TrainingParameters,
 ) -> None:
+    logging.basicConfig(
+        filename=training_parameters.log_directory / "qcpg_train.log",
+        level=training_parameters.log_level,
+        format="%[Rank 0] (asctime)s - %(levelname)s - %(message)s",
+    )
     logger.info("Using the following training parameters:")
     logger.info("\tEntangler: %s", training_parameters.entangler)
     logger.info("\tLayer quantity: %d", training_parameters.layer_quantity)
@@ -537,8 +562,11 @@ def multi_gpu_train_qcpq_circuit(
     logger.info("\tL2 regularization: %f", training_parameters.l2_regularizer)
     world_size: int = torch.cuda.device_count()
     logger.info("Found %d GPUs", world_size)
-    mp.spawn(
-        single_distributed_gpu_train_qcpg_circuit,
-        args=(world_size, training_parameters),
-        nprocs=world_size,
-    )
+    if world_size > 1:
+        mp.spawn(
+            single_distributed_gpu_train_qcpg_circuit,
+            args=(world_size, _get_free_port(), training_parameters),
+            nprocs=world_size,
+        )
+    else:
+        raise RuntimeError("This function requires more than 1 GPU to run.")

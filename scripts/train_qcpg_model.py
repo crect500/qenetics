@@ -156,12 +156,7 @@ if __name__ == "__main__":
         log_level: int = logging.DEBUG
     else:
         log_level = logging.INFO
-    if args.log_directory:
-        logging.basicConfig(
-            filename=args.log_directory / "qcpg_train.log",
-            level=log_level,
-            format="%(asctime)s - %(levelname)s - %(message)s",
-        )
+
     if not args.use_gpu:
         qcpg.train_qnn_circuit(
             qcpg.TrainingParameters(
@@ -177,6 +172,8 @@ if __name__ == "__main__":
                 l1_regularizer=args.l1_regularization,
                 l2_regularizer=args.l2_regularization,
                 model_filepath=args.model_filepath,
+                log_directory=args.log_directory,
+                log_level=log_level,
             )
         )
     else:
@@ -194,5 +191,7 @@ if __name__ == "__main__":
                 l1_regularizer=args.l1_regularization,
                 l2_regularizer=args.l2_regularization,
                 model_filepath=args.model_filepath,
+                log_directory=args.log_directory,
+                log_level=log_level,
             )
         )
