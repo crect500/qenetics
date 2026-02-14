@@ -144,7 +144,12 @@ def _parse_script_args() -> Namespace:
         help="The log level for the current script.",
     )
     parser.add_argument(
-        "--gpu", dest="use_gpu", action="store_true", required=False
+        "--gpus",
+        dest="gpu_quantity",
+        type=int,
+        required=False,
+        default=0,
+        help="The number of GPUs to use. If 0, CPUs will be used.",
     )
 
     return parser.parse_args()
@@ -157,41 +162,33 @@ if __name__ == "__main__":
     else:
         log_level = logging.INFO
 
-    if not args.use_gpu:
-        qcpg.train_qnn_circuit(
-            qcpg.TrainingParameters(
-                data_directory=args.data_directory,
-                output_filepath=args.output_filepath,
-                training_chromosomes=args.training_chromosomes,
-                validation_chromosomes=args.validation_chromosomes,
-                entangler=args.entangler,
-                layer_quantity=args.layer_quantity,
-                epochs=args.max_iterations,
-                batch_size=args.batch_size,
-                learning_rate=args.learning_rate,
-                l1_regularizer=args.l1_regularization,
-                l2_regularizer=args.l2_regularization,
-                model_filepath=args.model_filepath,
-                log_directory=args.log_directory,
-                log_level=log_level,
-            )
-        )
+    if args.gpu_quantity > 0:
+        device_name: str = "lightning.gpu"
+        if args.gpu_quantity > 1:
+            distribute: bool = True
+        else:
+            distribute = False
     else:
-        qcpg.multi_gpu_train_qcpq_circuit(
-            qcpg.TrainingParameters(
-                data_directory=args.data_directory,
-                output_filepath=args.output_filepath,
-                training_chromosomes=args.training_chromosomes,
-                validation_chromosomes=args.validation_chromosomes,
-                entangler=args.entangler,
-                layer_quantity=args.layer_quantity,
-                epochs=args.max_iterations,
-                batch_size=args.batch_size,
-                learning_rate=args.learning_rate,
-                l1_regularizer=args.l1_regularization,
-                l2_regularizer=args.l2_regularization,
-                model_filepath=args.model_filepath,
-                log_directory=args.log_directory,
-                log_level=log_level,
-            )
+        device_name = "lightning.qubit"
+        distribute = False
+
+    qcpg.train_qnn_circuit(
+        qcpg.TrainingParameters(
+            data_directory=args.data_directory,
+            output_filepath=args.output_filepath,
+            training_chromosomes=args.training_chromosomes,
+            validation_chromosomes=args.validation_chromosomes,
+            entangler=args.entangler,
+            layer_quantity=args.layer_quantity,
+            epochs=args.max_iterations,
+            batch_size=args.batch_size,
+            learning_rate=args.learning_rate,
+            l1_regularizer=args.l1_regularization,
+            l2_regularizer=args.l2_regularization,
+            model_filepath=args.model_filepath,
+            log_directory=args.log_directory,
+            log_level=log_level,
+            device_name=device_name,
+            distributed=distribute,
         )
+    )

@@ -43,10 +43,12 @@ class TrainingParameters:
     l2_regularizer: float = 0.0
     batch_size: int = 128
     report_every: int = 1
-    distributed: bool = True
+    device_name: str = "lightning.qubit"
+    distributed: bool = False
+    gpu_quantity: int = 0
     model_filepath: Path | None = None
     log_directory: Path | None = None
-    log_level = logging.INFO
+    log_level: int = logging.INFO
 
 
 def _get_free_port() -> int:
@@ -322,17 +324,22 @@ def _prepare_training(
         training_parameters.layer_quantity,
         output_shape,
         entangler=training_parameters.entangler,
+        device_name=training_parameters.device_name,
+        distribute=training_parameters.distributed,
     )
     if rank is not None:
-        training_sampler: DistributedSampler | None = DistributedSampler(
-            training_dataset
-        )
-        validation_sampler: DistributedSampler | None = DistributedSampler(
-            validation_dataset
-        )
         model = model.to(rank)
-        model = DistributedDataParallel(model, device_ids=[rank])
+        pin_memory: bool = True
+        if training_parameters.gpu_quantity > 1:
+            training_sampler: DistributedSampler | None = DistributedSampler(
+                training_dataset
+            )
+            validation_sampler: DistributedSampler | None = DistributedSampler(
+                validation_dataset
+            )
+            model = DistributedDataParallel(model, device_ids=[rank])
     else:
+        pin_memory = False
         training_sampler = None
         validation_sampler = None
 
@@ -341,12 +348,14 @@ def _prepare_training(
         batch_size=training_parameters.batch_size,
         shuffle=False,
         sampler=training_sampler,
+        pin_memory=pin_memory,
     )
     validation_loader = DataLoader(
         dataset=validation_dataset,
         batch_size=training_parameters.batch_size,
         shuffle=False,
         sampler=validation_sampler,
+        pin_memory=pin_memory,
     )
     return (
         training_loader,
@@ -362,13 +371,19 @@ def _train_one_epoch(
     training_loader: DataLoader,
     optimizer: optim.Optimizer,
     training_parameters: TrainingParameters,
+    *,
+    rank: int | None = None,
 ) -> float:
     accumulated_loss: float = 0.0
     return_loss: float = 0.0
     model.train(True)
+    training_loader.sampler.set_epoch(epoch)
 
     for batch_index, batch_data in enumerate(training_loader):
         inputs, labels = batch_data
+        if rank is not None:
+            inputs = inputs.to(rank)
+            labels = labels.to(rank)
         optimizer.zero_grad()
         outputs: Tensor = model(inputs)
         if len(labels.shape) > 1:
@@ -378,7 +393,7 @@ def _train_one_epoch(
             )
         else:
             loss: Tensor = nn.functional.binary_cross_entropy(
-                outputs.squeeze(), labels
+                outputs.squeeze(1), labels
             )
         if training_parameters.l1_regularizer != 0.0:
             loss += training_parameters.l1_regularizer * sum(
@@ -415,6 +430,8 @@ def _evaluate_validation_set(
     model: nn.Module,
     validation_loader: DataLoader,
     training_parameters: TrainingParameters,
+    *,
+    rank: int | None = None,
 ) -> tuple[float, float]:
     accumulated_loss: float = 0.0
     accumulated_auc: float = 0.0
@@ -423,11 +440,19 @@ def _evaluate_validation_set(
     with torch.no_grad():
         for batch_index, validation_data in enumerate(validation_loader):
             inputs, labels = validation_data
+            if rank is not None:
+                inputs = inputs.to(rank)
+                labels = labels.to(rank)
             outputs: Tensor = model(inputs)
 
-            true_positive_rate, false_positive_rate, _ = roc_curve(
-                labels.flatten(), outputs.flatten()
-            )
+            if training_parameters.gpu_quantity > 1:
+                true_positive_rate, false_positive_rate, _ = roc_curve(
+                    labels.cpu().flatten(), outputs.cpu().flatten()
+                )
+            else:
+                true_positive_rate, false_positive_rate, _ = roc_curve(
+                    labels.flatten(), outputs.flatten()
+                )
 
             batch_auc: float = auc(false_positive_rate, true_positive_rate)
             if isnan(batch_auc):
@@ -441,7 +466,7 @@ def _evaluate_validation_set(
                 )
             else:
                 loss: Tensor = nn.functional.binary_cross_entropy(
-                    outputs.squeeze(), labels
+                    outputs.squeeze(1), labels
                 )
 
             if training_parameters.l1_regularizer != 0.0:
@@ -475,10 +500,15 @@ def _train_all_epochs(
     for epoch in range(training_parameters.epochs):
         logger.info(f"Training epoch {epoch}")
         average_training_loss: float = _train_one_epoch(
-            model, epoch, training_loader, optimizer, training_parameters
+            model,
+            epoch,
+            training_loader,
+            optimizer,
+            training_parameters,
+            rank=rank,
         )
         average_validation_loss, average_auc = _evaluate_validation_set(
-            model, validation_loader, training_parameters
+            model, validation_loader, training_parameters, rank=rank
         )
         logger.info(
             f"Epoch {epoch} Training loss: {average_training_loss}, Validation loss: "
@@ -490,33 +520,7 @@ def _train_all_epochs(
             torch.save(model.module.state_dict(), output_filepath)
 
 
-def train_qnn_circuit(training_parameters: TrainingParameters) -> None:
-    logging.basicConfig(
-        filename=training_parameters.log_directory / "qcpg_train.log",
-        level=training_parameters.log_level,
-        format="(asctime)s - %(levelname)s - %(message)s",
-    )
-    logger.info("Using the following training parameters:")
-    logger.info("\tEntangler: %s", training_parameters.entangler)
-    logger.info("\tLayer quantity: %d", training_parameters.layer_quantity)
-    logger.info("\tLearning rate: %f", training_parameters.learning_rate)
-    logger.info("\tEpochs: %d", training_parameters.epochs)
-    logger.info("\tL1 regularization: %f", training_parameters.l1_regularizer)
-    logger.info("\tL2 regularization: %f", training_parameters.l2_regularizer)
-    training_loader, validation_loader, model, optimizer = _prepare_training(
-        training_parameters
-    )
-    _train_all_epochs(
-        model=model,
-        training_loader=training_loader,
-        validation_loader=validation_loader,
-        optimizer=optimizer,
-        output_filepath=training_parameters.output_filepath,
-        training_parameters=training_parameters,
-    )
-
-
-def single_distributed_gpu_train_qcpg_circuit(
+def _single_distributed_gpu_train_qcpg_circuit(
     rank: int,
     world_size: int,
     master_port: int,
@@ -545,13 +549,33 @@ def single_distributed_gpu_train_qcpg_circuit(
     destroy_process_group()
 
 
-def multi_gpu_train_qcpq_circuit(
+def _multi_gpu_train_qcpq_circuit(
     training_parameters: TrainingParameters,
 ) -> None:
+    if torch.cuda.device_count() < training_parameters.gpu_quantity:
+        raise RuntimeError(
+            "%d GPUs requested. Only found %d",
+            training_parameters.gpu_quantity,
+            torch.cuda.device_count(),
+        )
+
+    world_size: int = training_parameters.gpu_quantity
+    logger.info("Found %d GPUs", world_size)
+    if world_size > 1:
+        mp.spawn(
+            _single_distributed_gpu_train_qcpg_circuit,
+            args=(world_size, _get_free_port(), training_parameters),
+            nprocs=world_size,
+        )
+    else:
+        raise RuntimeError("This function requires more than 1 GPU to run.")
+
+
+def train_qnn_circuit(training_parameters: TrainingParameters) -> None:
     logging.basicConfig(
         filename=training_parameters.log_directory / "qcpg_train.log",
         level=training_parameters.log_level,
-        format="%[Rank 0] (asctime)s - %(levelname)s - %(message)s",
+        format="(asctime)s - %(levelname)s - %(message)s",
     )
     logger.info("Using the following training parameters:")
     logger.info("\tEntangler: %s", training_parameters.entangler)
@@ -560,13 +584,25 @@ def multi_gpu_train_qcpq_circuit(
     logger.info("\tEpochs: %d", training_parameters.epochs)
     logger.info("\tL1 regularization: %f", training_parameters.l1_regularizer)
     logger.info("\tL2 regularization: %f", training_parameters.l2_regularizer)
-    world_size: int = torch.cuda.device_count()
-    logger.info("Found %d GPUs", world_size)
-    if world_size > 1:
-        mp.spawn(
-            single_distributed_gpu_train_qcpg_circuit,
-            args=(world_size, _get_free_port(), training_parameters),
-            nprocs=world_size,
+
+    if training_parameters.gpu_quantity in [0, 1]:
+        if training_parameters.gpu_quantity == 1:
+            rank: int | None = 0
+        else:
+            rank = None
+        training_loader, validation_loader, model, optimizer = (
+            _prepare_training(training_parameters, rank=rank)
         )
+        _train_all_epochs(
+            model=model,
+            training_loader=training_loader,
+            validation_loader=validation_loader,
+            optimizer=optimizer,
+            output_filepath=training_parameters.output_filepath,
+            training_parameters=training_parameters,
+            rank=rank,
+        )
+    elif training_parameters.gpu_quantity > 1:
+        _multi_gpu_train_qcpq_circuit(training_parameters)
     else:
-        raise RuntimeError("This function requires more than 1 GPU to run.")
+        raise ValueError("Negative GPU quantity specified.")

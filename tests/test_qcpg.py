@@ -53,6 +53,8 @@ def test_remove_nans(truth: list[float], expected_indices: list[float]) -> None:
         (["C"], 2, 1),
         (["G"], 1, 2),
         (["ATCGATCG"], 2, 2),
+        (["A", "C"], 1, 1),
+        (["ATCGATCG", "GCTAGCTA"], 2, 2),
     ],
 )
 def test_train_one_epoch(

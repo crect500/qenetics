@@ -10,6 +10,7 @@ from qenetics.tools import data
 
 AMPLITUDE_QUBIT_QUANTITY: int = 2
 UNIQUE_ROTATIONS_QUANTITY: int = 3
+SEQUENCE_LENGTH: int = -1
 
 
 class QNN(nn.Module):
@@ -20,10 +21,12 @@ class QNN(nn.Module):
         output_quantity: int,
         entangler: str = "strong",
         encoding: str = "amplitude",
-        device_name: str = "default.qubit",
+        device_name: str = "lightning.qubit",
         distribute: bool = True,
     ) -> None:
         super(QNN, self).__init__()
+        global SEQUENCE_LENGTH
+        SEQUENCE_LENGTH = sequence_length
 
         self.set_quantum_layer(
             encoding,
