@@ -231,3 +231,64 @@ def test_create_h5_dataset() -> None:
             assert fd["methylation_ratios"]["test2"][1] == 0.5
             assert np.isnan(fd["methylation_ratios"]["test3"][0])
             assert fd["methylation_ratios"]["test3"][1] == 1.0
+
+
+@pytest.mark.parametrize(
+    ("original_length", "new_length", "expected_start", "expected_end"),
+    [
+        (1, 1, None, 1),
+        (2, 1, 1, None),
+        (4, 2, 1, 3),
+        (10, 4, 3, 7),
+        (5, 3, 1, 4),
+        (9, 5, 2, 7),
+        (1001, 33, 484, 517),
+    ],
+)
+def test_find_bounds(
+    original_length: int,
+    new_length: int,
+    expected_start: int,
+    expected_end: int,
+) -> None:
+    if expected_start is None:
+        with pytest.raises(ValueError, match=r"is the same or greater"):
+            _ = data._find_bounds(original_length, new_length)
+    elif expected_end is None:
+        with pytest.raises(
+            ValueError, match=r"divisibility by 2 must be the same as"
+        ):
+            _ = data._find_bounds(original_length, new_length)
+    else:
+        start, end = data._find_bounds(original_length, new_length)
+        assert (start, end) == (expected_start, expected_end)
+
+
+def test_reduce_sample_size(test_single_amplitude_dataset_directory) -> None:
+    test_filepath: Path = test_single_amplitude_dataset_directory / "chr1.h5"
+    new_size: int = 4
+    with TemporaryDirectory() as temp_dir:
+        temp_path = Path(temp_dir)
+        data._reduce_sample_size(test_filepath, temp_path, new_size)
+        with (
+            h5py.File(test_filepath) as original_dataset,
+            h5py.File(
+                temp_path / (test_filepath.stem + "_" + str(new_size) + ".h5")
+            ) as new_dataset,
+        ):
+            original_sequences: h5py.Dataset = original_dataset[
+                data.METHYLATION_SEQUENCES_KEY
+            ]
+            original_ratios: h5py.Dataset = original_dataset[
+                data.METHYLATION_RATIOS_KEY
+            ]
+            new_sequences: h5py.Dataset = new_dataset[
+                data.METHYLATION_SEQUENCES_KEY
+            ]
+            new_ratios: h5py.Dataset = new_dataset[data.METHYLATION_RATIOS_KEY]
+            assert new_sequences.shape == (
+                original_sequences.shape[0],
+                new_size,
+                original_sequences.shape[2],
+            )
+            assert original_ratios.shape == new_ratios.shape

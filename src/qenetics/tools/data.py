@@ -19,6 +19,8 @@ from qenetics.tools import dna, methylation
 logger = logging.getLogger(__name__)
 
 UNIQUE_NUCLEOTIDE_QUANTITY: int = 4
+METHYLATION_SEQUENCES_KEY: str = "methylation_sequences"
+METHYLATION_RATIOS_KEY: str = "methylation_ratios"
 
 
 @dataclass
@@ -35,9 +37,9 @@ class H5CpGDataset(Dataset):
     ) -> None:
         self.file_list = filepaths
         with h5py.File(filepaths[0]) as fd:
-            self.sequence_length = fd["methylation_sequences"].shape[1]
-            if isinstance(fd["methylation_ratios"], h5py.Group):
-                self.experiment_names = fd["methylation_ratios"].keys()
+            self.sequence_length = fd[METHYLATION_SEQUENCES_KEY].shape[1]
+            if isinstance(fd[METHYLATION_RATIOS_KEY], h5py.Group):
+                self.experiment_names = fd[METHYLATION_RATIOS_KEY].keys()
                 self.experiment_quantity = len(self.experiment_names)
             else:
                 self.experiment_quantity = 1
@@ -61,7 +63,7 @@ class H5CpGDataset(Dataset):
         for filepath in filepaths:
             with h5py.File(filepath) as fd:
                 new_sample_quantity: int = (
-                    sample_quantity + fd["methylation_sequences"].shape[0]
+                    sample_quantity + fd[METHYLATION_SEQUENCES_KEY].shape[0]
                 )
                 self.chromosome_indices[filepath.stem[3:]] = ChromosomeIndices(
                     start=sample_quantity, end=new_sample_quantity
@@ -107,13 +109,13 @@ class H5CpGDataset(Dataset):
                     :,
                     :,
                 ] = torch.tensor(
-                    dataset["methylation_sequences"],
+                    dataset[METHYLATION_SEQUENCES_KEY],
                     dtype=torch.float,
                     requires_grad=False,
                 )
                 if self.experiment_quantity > 1:
                     for label_index, experiment_name in enumerate(
-                        dataset["methylation_ratios"].keys()
+                        dataset[METHYLATION_RATIOS_KEY].keys()
                     ):
                         self.labels[
                             self.chromosome_indices[
@@ -121,7 +123,7 @@ class H5CpGDataset(Dataset):
                             ].start : self.chromosome_indices[chromosome].end,
                             label_index,
                         ] = torch.tensor(
-                            dataset["methylation_ratios"][experiment_name],
+                            dataset[METHYLATION_RATIOS_KEY][experiment_name],
                             dtype=torch.float,
                             requires_grad=False,
                         )
@@ -131,7 +133,7 @@ class H5CpGDataset(Dataset):
                             chromosome
                         ].start : self.chromosome_indices[chromosome].end
                     ] = torch.tensor(
-                        dataset["methylation_ratios"],
+                        dataset[METHYLATION_RATIOS_KEY],
                         dtype=torch.float,
                         requires_grad=False,
                     )
@@ -350,10 +352,13 @@ def _create_h5_dataset(
     with h5py.File(h5_filepath, "w") as fd:
         (
             fd.create_dataset(
-                "methylation_sequences", data=sequences, dtype="i1", chunks=True
+                METHYLATION_SEQUENCES_KEY,
+                data=sequences,
+                dtype="i1",
+                chunks=True,
             ),
         )
-        ratios_dataset: h5py.Group = fd.create_group("methylation_ratios")
+        ratios_dataset: h5py.Group = fd.create_group(METHYLATION_RATIOS_KEY)
         for experiment_index, experiment_name in enumerate(experiment_names):
             ratios_dataset.create_dataset(
                 experiment_name,
@@ -423,3 +428,54 @@ def create_h5_dataset_from_methylation_profiles(
         fasta_filepath=fasta_filepath,
         sequence_length=sequence_length,
     )
+
+
+def _find_bounds(original_length: int, new_length: int) -> tuple[int, int]:
+    if new_length >= original_length:
+        raise ValueError(
+            f"Requested length {new_length} is the same or greater than "
+            f"the original length {original_length}"
+        )
+
+    is_original_even: bool = original_length % 2 == 0
+    is_new_even: bool = new_length % 2 == 0
+    if is_original_even != is_new_even:
+        raise ValueError(
+            f"Original length of {original_length} divisibility by 2 must "
+            f"be the same as new length of {new_length} divisibility"
+        )
+
+    half_length: int = new_length // 2
+    middle: int = original_length // 2
+    start: int = middle - half_length
+    if is_original_even:
+        end: int = middle + half_length
+    else:
+        end = middle + half_length + 1
+
+    return start, end
+
+
+def _reduce_sample_size(
+    data_filepath: Path, output_directory: Path, new_length: int
+) -> None:
+    with h5py.File(data_filepath) as data:
+        original_sequence_length: int = data[METHYLATION_SEQUENCES_KEY].shape[1]
+        start, end = _find_bounds(original_sequence_length, new_length)
+        output_filepath: Path = output_directory / data_filepath.name
+
+        with h5py.File(output_filepath, "w") as fd:
+            fd.create_dataset(
+                METHYLATION_SEQUENCES_KEY,
+                data=data[METHYLATION_SEQUENCES_KEY][:, start:end, :],
+            )
+            fd.create_dataset(
+                METHYLATION_RATIOS_KEY, data=data[METHYLATION_RATIOS_KEY]
+            )
+
+
+def reduce_dataset_sequence_length(
+    original_directory: Path, output_directory: Path, new_length: int
+) -> None:
+    for filepath in original_directory.iterdir():
+        _reduce_sample_size(filepath, output_directory, new_length)
