@@ -582,6 +582,8 @@ def train_qnn_circuit(training_parameters: TrainingParameters) -> None:
     )
     logger.info("Using the following training parameters:")
     logger.info("\tEntangler: %s", training_parameters.entangler)
+    logger.info("\tEncoding: %s", training_parameters.encoding)
+    logger.info("\tMeasurement: %s", training_parameters.measurement)
     logger.info("\tLayer quantity: %d", training_parameters.layer_quantity)
     logger.info("\tLearning rate: %f", training_parameters.learning_rate)
     logger.info("\tEpochs: %d", training_parameters.epochs)
