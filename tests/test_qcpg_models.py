@@ -212,10 +212,8 @@ def test_basis_basic_entangling_torch(
         qcpg_models.calculate_address_register_size(sequence_length)
         + data.UNIQUE_NUCLEOTIDE_QUANTITY
     )
-    quantum_layer: qml.qnn.torch.TorchLayer = (
-        qcpg_models.single_basic_entangling_torch(
-            sequence_length, layer_quantity
-        )
+    quantum_layer: qml.qnn.torch.TorchLayer = qcpg_models.define_torch_qnode(
+        sequence_length, layer_quantity, encoding="basis", entangling="basic"
     )
     assert quantum_layer.weights.shape == (layer_quantity, wire_quantity)
 
@@ -232,10 +230,8 @@ def test_basis_strongly_entangled_torch(
         qcpg_models.calculate_address_register_size(sequence_length)
         + data.UNIQUE_NUCLEOTIDE_QUANTITY
     )
-    quantum_layer: qml.qnn.torch.TorchLayer = (
-        qcpg_models.basis_strongly_entangled_torch(
-            sequence_length, layer_quantity
-        )
+    quantum_layer: qml.qnn.torch.TorchLayer = qcpg_models.define_torch_qnode(
+        sequence_length, layer_quantity, encoding="basis", entangling="strong"
     )
     assert quantum_layer.weights.shape == (
         layer_quantity,
@@ -255,10 +251,8 @@ def test_amplitude_basic_entangling_torch(
         qcpg_models.calculate_address_register_size(sequence_length)
         + qcpg_models.AMPLITUDE_QUBIT_QUANTITY
     )
-    quantum_layer: qml.qnn.torch.TorchLayer = (
-        qcpg_models.amplitude_basic_entangling_torch(
-            sequence_length, layer_quantity
-        )
+    quantum_layer: qml.qnn.torch.TorchLayer = qcpg_models.define_torch_qnode(
+        sequence_length, layer_quantity, entangling="basic"
     )
     assert quantum_layer.weights.shape == (layer_quantity, wire_quantity)
 
@@ -267,41 +261,47 @@ def test_amplitude_basic_entangling_torch(
     ("layer_quantity", "sequence_length"),
     [(1, 1), (1, 2), (2, 1), (1, 3), (2, 3)],
 )
-def test_basis_strongly_entangled_torch(
+def test_amplitude_strongly_entangled_torch(
     layer_quantity: int, sequence_length: int
 ) -> None:
     wire_quantity = (
         qcpg_models.calculate_address_register_size(sequence_length)
         + qcpg_models.AMPLITUDE_QUBIT_QUANTITY
     )
-    quantum_layer: qml.qnn.torch.TorchLayer = (
-        qcpg_models.amplitude_strongly_entangling_torch(
-            sequence_length, layer_quantity
-        )
+    quantum_layer: qml.qnn.torch.TorchLayer = qcpg_models.define_torch_qnode(
+        sequence_length, layer_quantity, entangling="strong"
     )
     assert quantum_layer.weights.shape == (
         layer_quantity,
-        qcpg_models.UNIQUE_ROTATIONS_QUANTITY,
         wire_quantity,
+        qcpg_models.UNIQUE_ROTATIONS_QUANTITY,
     )
 
 
 @pytest.mark.parametrize(
-    ("entangler", "encoding", "device_name", "distribute"),
+    ("entangler", "encoding", "measurement", "device_name", "distribute"),
     [
-        ("strong", "amplitude", "default.qubit", False),
-        ("invalid", "amplitude", "default.qubit", False),
-        ("strong", "invalid", "default.qubit", False),
+        ("basic", "amplitude", "probability", "default.qubit", False),
+        ("basic", "amplitude", "expectation", "default.qubit", False),
+        ("strong", "amplitude", "probability", "default.qubit", False),
+        ("strong", "amplitude", "expectation", "default.qubit", False),
+        ("invalid", "amplitude", "probability", "default.qubit", False),
+        ("strong", "invalid", "probability", "default.qubit", False),
+        ("strong", "amplitude", "invalid", "default.qubit", False),
     ],
 )
 def test_QNN(
-    entangler: str, encoding: str, device_name: str, distribute: bool
+    entangler: str,
+    encoding: str,
+    measurement: str,
+    device_name: str,
+    distribute: bool,
 ) -> None:
     sequence_length: int = 8
     output_quantity: int = 4
     if entangler == "invalid":
         with pytest.raises(
-            ValueError, match=r"Entangler invalid not recognized or supported."
+            ValueError, match="Unknown entangling layer type invalid"
         ):
             _ = qcpg_models.QNN(
                 sequence_length=sequence_length,
@@ -309,13 +309,14 @@ def test_QNN(
                 output_quantity=output_quantity,
                 entangler=entangler,
                 encoding=encoding,
+                measurement=measurement,
                 device_name=device_name,
                 distribute=distribute,
             )
     elif encoding == "invalid":
         with pytest.raises(
             ValueError,
-            match=r"Encoding method invalid not recognized or supported.",
+            match="Unknown encoding method invalid",
         ):
             _ = qcpg_models.QNN(
                 sequence_length=sequence_length,
@@ -323,6 +324,22 @@ def test_QNN(
                 output_quantity=output_quantity,
                 entangler=entangler,
                 encoding=encoding,
+                measurement=measurement,
+                device_name=device_name,
+                distribute=distribute,
+            )
+    elif measurement == "invalid":
+        with pytest.raises(
+            ValueError,
+            match="Unknown measurement type invalid",
+        ):
+            _ = qcpg_models.QNN(
+                sequence_length=sequence_length,
+                quantum_layer_quantity=2,
+                output_quantity=output_quantity,
+                entangler=entangler,
+                encoding=encoding,
+                measurement=measurement,
                 device_name=device_name,
                 distribute=distribute,
             )
@@ -333,6 +350,7 @@ def test_QNN(
             output_quantity=output_quantity,
             entangler=entangler,
             encoding=encoding,
+            measurement=measurement,
             device_name=device_name,
             distribute=distribute,
         )

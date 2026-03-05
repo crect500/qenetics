@@ -61,6 +61,22 @@ def _parse_script_args() -> Namespace:
         help="'basic' for BasicEntanglerLayers, 'strong' for StronglyEntanglingLayers.",
     )
     parser.add_argument(
+        "--encoding",
+        dest="encoding",
+        required=False,
+        type=str,
+        default="amplitude",
+        help="'basis' for basis encoding, 'amplitude' for amplitude encoding.",
+    )
+    parser.add_argument(
+        "--measurement",
+        dest="measurement",
+        required=False,
+        type=str,
+        default="probability",
+        help="'probability' for state probabilities, 'expectation' for observables.",
+    )
+    parser.add_argument(
         "--max-iterations",
         dest="max_iterations",
         required=False,
@@ -179,6 +195,8 @@ if __name__ == "__main__":
             training_chromosomes=args.training_chromosomes,
             validation_chromosomes=args.validation_chromosomes,
             entangler=args.entangler,
+            encoding=args.encoding,
+            measurement=args.measurement,
             layer_quantity=args.layer_quantity,
             epochs=args.max_iterations,
             batch_size=args.batch_size,
@@ -188,6 +206,7 @@ if __name__ == "__main__":
             model_filepath=args.model_filepath,
             log_directory=args.log_directory,
             log_level=log_level,
+            gpu_quantity=args.gpu_quantity,
             device_name=device_name,
             distributed=distribute,
         )

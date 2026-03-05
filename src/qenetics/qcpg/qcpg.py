@@ -1,6 +1,5 @@
 from dataclasses import dataclass, field
 import logging
-from math import isnan
 import os
 from pathlib import Path
 import socket
@@ -35,7 +34,9 @@ class TrainingParameters:
     validation_chromosomes: list[str] = field(
         default_factory=lambda: ["2", "4", "6", "8", "10", "12"]
     )
+    encoding: str = "amplitude"
     entangler: str = "basic"
+    measurement: str = "probability"
     layer_quantity: int = 1
     epochs: int = 100
     learning_rate: float = 0.0001
@@ -43,7 +44,7 @@ class TrainingParameters:
     l2_regularizer: float = 0.0
     batch_size: int = 128
     report_every: int = 1
-    device_name: str = "lightning.qubit"
+    device_name: str = "default.qubit"
     distributed: bool = False
     gpu_quantity: int = 0
     model_filepath: Path | None = None
@@ -324,6 +325,8 @@ def _prepare_training(
         training_parameters.layer_quantity,
         output_shape,
         entangler=training_parameters.entangler,
+        encoding=training_parameters.encoding,
+        measurement=training_parameters.measurement,
         device_name=training_parameters.device_name,
         distribute=training_parameters.distributed,
     )
@@ -338,6 +341,9 @@ def _prepare_training(
                 validation_dataset
             )
             model = DistributedDataParallel(model, device_ids=[rank])
+        else:
+            training_sampler = None
+            validation_sampler = None
     else:
         pin_memory = False
         training_sampler = None
@@ -377,7 +383,8 @@ def _train_one_epoch(
     accumulated_loss: float = 0.0
     return_loss: float = 0.0
     model.train(True)
-    training_loader.sampler.set_epoch(epoch)
+    if training_parameters.gpu_quantity > 1:
+        training_loader.sampler.set_epoch(epoch)
 
     for batch_index, batch_data in enumerate(training_loader):
         inputs, labels = batch_data
@@ -445,7 +452,7 @@ def _evaluate_validation_set(
                 labels = labels.to(rank)
             outputs: Tensor = model(inputs)
 
-            if training_parameters.gpu_quantity > 1:
+            if rank is not None:
                 true_positive_rate, false_positive_rate, _ = roc_curve(
                     labels.cpu().flatten(), outputs.cpu().flatten()
                 )
@@ -454,11 +461,7 @@ def _evaluate_validation_set(
                     labels.flatten(), outputs.flatten()
                 )
 
-            batch_auc: float = auc(false_positive_rate, true_positive_rate)
-            if isnan(batch_auc):
-                invalid_auc_count += 0
-            else:
-                accumulated_auc += auc(false_positive_rate, true_positive_rate)
+            accumulated_auc += auc(false_positive_rate, true_positive_rate)
 
             if len(labels.shape) > 1:
                 loss: Tensor = nn.functional.binary_cross_entropy(
@@ -514,10 +517,10 @@ def _train_all_epochs(
             f"Epoch {epoch} Training loss: {average_training_loss}, Validation loss: "
             f"{average_validation_loss}, Validation AUC: {average_auc}"
         )
-        if rank is None:
-            torch.save(model.state_dict(), output_filepath)
-        elif rank == 0:
+        if training_parameters.gpu_quantity > 1 and rank == 0:
             torch.save(model.module.state_dict(), output_filepath)
+        else:
+            torch.save(model.state_dict(), output_filepath)
 
 
 def _single_distributed_gpu_train_qcpg_circuit(
@@ -575,7 +578,7 @@ def train_qnn_circuit(training_parameters: TrainingParameters) -> None:
     logging.basicConfig(
         filename=training_parameters.log_directory / "qcpg_train.log",
         level=training_parameters.log_level,
-        format="(asctime)s - %(levelname)s - %(message)s",
+        format="%(asctime)s - %(levelname)s - %(message)s",
     )
     logger.info("Using the following training parameters:")
     logger.info("\tEntangler: %s", training_parameters.entangler)

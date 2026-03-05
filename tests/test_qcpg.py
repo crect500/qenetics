@@ -160,6 +160,7 @@ def test_train_qnn_circuit(
         training_parameters = qcpg.TrainingParameters(
             data_directory=test_single_amplitude_dataset_directory,
             output_filepath=Path(temp_dir) / "output.dat",
+            log_directory=Path(temp_dir) / "log.log",
             training_chromosomes=["1", "2"],
             validation_chromosomes=["1", "2"],
             batch_size=2,
