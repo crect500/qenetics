@@ -1,7 +1,7 @@
-from keras import backend, Layer, layers, models, regularizers
+from keras import Layer, backend, layers, models, regularizers
 
 
-class Model(object):
+class Model:
     """Abstract model call.
 
     Abstract class of the DNA model.
@@ -16,9 +16,9 @@ class Model(object):
 
     __slots__ = (
         "dropout",
+        "init_name",
         "layer1_decay",
         "layer2_decay",
-        "init_name",
         "model_name",
         "scope",
     )
@@ -39,7 +39,6 @@ class Model(object):
 
     def inputs(self, *args, **kwargs):
         """Return list of Keras model inputs."""
-        pass
 
     def _build(self, input, output):
         """Build final model at the end of `__call__`."""
@@ -54,14 +53,13 @@ class Model(object):
         ----
         inputs: Keras model inputs
         """
-        pass
 
 
 class DnaModel(Model):
     """Abstract class of a DNA model."""
 
     def __init__(self, *args, **kwargs):
-        super(DnaModel, self).__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)
         self.scope = "dna"
 
     def inputs(self, dna_wlen: int):
@@ -76,7 +74,7 @@ class CnnL2h128(DnaModel):
     """
 
     def __init__(self, nb_hidden=128, *args, **kwargs):
-        super(CnnL2h128, self).__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)
         self.nb_hidden = nb_hidden
 
     def __call__(self, inputs):
@@ -142,14 +140,14 @@ class ScaledSigmoid(layers.Layer):
     def __init__(self, scaling=1.0, **kwargs):
         self.supports_masking = True
         self.scaling = scaling
-        super(ScaledSigmoid, self).__init__(**kwargs)
+        super().__init__(**kwargs)
 
     def call(self, x, mask=None):
         return backend.sigmoid(x) * self.scaling
 
     def get_config(self):
         config = {"scaling": self.scaling}
-        base_config = super(ScaledSigmoid, self).get_config()
+        base_config = super().get_config()
         return dict(list(base_config.items()) + list(config.items()))
 
 

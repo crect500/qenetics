@@ -1,8 +1,8 @@
-from dataclasses import dataclass
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 
-from keras import optimizers, metrics
+from keras import metrics, optimizers
 from keras.losses import BinaryCrossentropy
 from keras.models import Model
 from numpy.typing import NDArray

@@ -4,8 +4,8 @@ from unittest import mock
 
 import h5py
 import numpy as np
-from numpy.typing import NDArray
 import pytest
+from numpy.typing import NDArray
 from torch.utils.data import DataLoader
 
 from qenetics.tools import data

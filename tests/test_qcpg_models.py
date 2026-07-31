@@ -41,7 +41,6 @@ def test_device_setup(device_name: str, distribute: bool) -> None:
         ("A", 1),
         ("C", 1),
         ("A", 2),
-        ("A", 2),
         ("A", 8),
     ],
 )

@@ -5,7 +5,7 @@ from math import ceil, log2
 
 import pennylane as qml
 import torch.nn
-from torch import nn, Tensor
+from torch import Tensor, nn
 from torch.nn import functional
 
 from qenetics.tools import data
@@ -25,9 +25,10 @@ class QNN(nn.Module):
         encoding: str = "amplitude",
         measurement: str = "probability",
         device_name: str = "default.qubit",
+        diff_method: str = "adjoint",
         distribute: bool = True,
     ) -> None:
-        super(QNN, self).__init__()
+        super().__init__()
         global SEQUENCE_LENGTH
         SEQUENCE_LENGTH = sequence_length
 
@@ -39,6 +40,7 @@ class QNN(nn.Module):
             encoding=encoding,
             entangling=entangler,
             measurement=measurement,
+            diff_method=diff_method
         )
 
         wire_quantity: int = (
@@ -95,7 +97,7 @@ def calculate_address_register_size(encode_quantity: int) -> int:
     if encode_quantity == 1:
         return 1
 
-    return int(ceil(log2(encode_quantity)))
+    return ceil(log2(encode_quantity))
 
 
 def basis_encode_nucleotide(
@@ -298,13 +300,14 @@ def define_torch_qnode(
     encoding: str = "amplitude",
     entangling: str = "basic",
     measurement: str = "probability",
+    diff_method="adjoint"
 ) -> qml.qnn.TorchLayer:
     wire_quantity: int = _determine_wire_quantity(sequence_length, encoding)
     device: qml.devices.Device = _device_setup(
         device_name, wire_quantity, distribute
     )
 
-    @qml.qnode(device)
+    @qml.qnode(device, interface="torch", diff_method=diff_method)
     def _qnode(inputs: Tensor, weights: Tensor):
         _encode_all_nucleotides(inputs, encoding)
         for _ in range(quantum_layer_quantity):

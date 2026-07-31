@@ -1,23 +1,24 @@
-from dataclasses import dataclass, field
 import logging
 import os
-from pathlib import Path
 import socket
+from dataclasses import dataclass, field
+from pathlib import Path
 
 import jax
-import torch
-from jax import numpy as jnp
 import numpy as np
-from numpy.typing import NDArray
 import optax
 import pennylane as qml
-from sklearn.metrics import auc, roc_curve
-from torch import nn, optim, Tensor
-from torch.distributed import init_process_group, destroy_process_group
+import torch
 import torch.multiprocessing as mp
+from jax import numpy as jnp
+from numpy.typing import NDArray
+from sklearn.metrics import auc, roc_curve
+from torch import Tensor, nn, optim
+from torch.distributed import destroy_process_group, init_process_group
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
+
 from qenetics.qcpg import qcpg_models
 from qenetics.tools import data, dna, metrics
 
@@ -37,6 +38,7 @@ class TrainingParameters:
     encoding: str = "amplitude"
     entangler: str = "basic"
     measurement: str = "probability"
+    diff_method: str = "adjoint"
     layer_quantity: int = 1
     epochs: int = 100
     learning_rate: float = 0.0001
@@ -99,7 +101,7 @@ def _strongly_entangled_run_circuit(
     -------
 
     """
-    logging.debug(f"Training on sequence {str(sequence)}")
+    logger.debug(f"Training on sequence {sequence!s}")
     data_register_size: int = 4
     address_register_size: int = qcpg_models.calculate_address_register_size(
         len(sequence)
@@ -180,11 +182,11 @@ def _strongly_entangled_run_update_parameters(
     -------
     The parameters, current optimizer state, and loss value of the iteration.
     """
-    logging.debug("Executing circuit.")
+    logger.debug("Executing circuit.")
     loss_value, grads = jax.value_and_grad(
         _strongly_entangled_run_calculate_loss
     )(parameters, sequences, methylations)
-    logging.debug("Updating parameters.")
+    logger.debug("Updating parameters.")
     updates, optimizer_state = optimizer.update(grads, optimizer_state)
     parameters = optax.apply_updates(parameters, updates)
 
@@ -256,11 +258,11 @@ def train_strongly_entangled_qcpg_circuit(
     with output_file.open("w") as fd:
         fd.write(f"iteration,loss,{metrics.METRICS_HEADERS}\n")
         optimizer = optax.adam(learning_rate=0.05)
-        loss_history: list[float] = list()
+        loss_history: list[float] = []
         metrics_history: list[metrics.Metrics] = []
         opt_state = optimizer.init(parameters)
         for iteration in range(max_steps):
-            logging.info(f"Training loop {iteration}")
+            logger.info(f"Training loop {iteration}")
             parameters, opt_state, loss_value = (
                 _strongly_entangled_run_update_parameters(
                     parameters,
@@ -275,7 +277,7 @@ def train_strongly_entangled_qcpg_circuit(
             )
             fd.write(
                 f"{iteration},"
-                f"{str(loss_value)},"
+                f"{loss_value!s},"
                 f"{(metrics.metrics_to_csv_row(result_metrics))}\n"
             )
             loss_history.append(float(loss_value))
@@ -329,6 +331,7 @@ def _prepare_training(
         measurement=training_parameters.measurement,
         device_name=training_parameters.device_name,
         distribute=training_parameters.distributed,
+        diff_method=training_parameters.diff_method
     )
     if rank is not None:
         model = model.to(rank)

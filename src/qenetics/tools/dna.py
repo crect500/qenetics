@@ -219,10 +219,7 @@ def find_next_comment(file_descriptor: TextIOBase, offset: int) -> bool:
     True if found, False otherwise.
     """
     file_descriptor.seek(offset)
-    if file_descriptor.read(1) == ">":
-        return True
-
-    return False
+    return file_descriptor.read(1) == ">"
 
 
 def determine_line_length(fasta_file: Path) -> int:
@@ -239,7 +236,7 @@ def determine_line_length(fasta_file: Path) -> int:
     """
     with fasta_file.open() as fd:
         if not find_next_comment(fd, 0):
-            raise IOError(
+            raise OSError(
                 "Unable to determine sequence line length of fasta file."
             )
 

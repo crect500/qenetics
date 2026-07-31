@@ -2,8 +2,8 @@ from argparse import ArgumentParser, Namespace
 from pathlib import Path
 
 from qenetics.tools.cpg_sampler import (
-    convert_methylation_profiles,
     MethylationFormat,
+    convert_methylation_profiles,
 )
 
 

@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 import io
+import logging
 from collections.abc import Generator
 from dataclasses import dataclass
-import logging
-
 from pathlib import Path
 
 from qenetics.tools import cpg_sampler
@@ -77,7 +76,7 @@ def retrieve_methylation_data(
     Generator for MethylationInfo objects from the methylation file.
     """
     with open(methylation_filepath) as fd:
-        for line in fd.readlines():
+        for line in fd:
             methylation_information: MethylationInfo | None = (
                 _process_methylation_line(line, minimum_samples)
             )

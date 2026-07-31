@@ -1,17 +1,18 @@
 from __future__ import annotations
 
+import logging
+from collections.abc import Iterable
 from csv import DictReader
 from dataclasses import dataclass
 from io import TextIOBase
-import logging
 from math import sqrt
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 import h5py
 import numpy as np
-from numpy.typing import NDArray
 import torch
+from numpy.typing import NDArray
 from torch.utils.data import Dataset
 
 from qenetics.tools import dna, methylation
@@ -284,10 +285,7 @@ def _increment_or_create_entry(dictionary: dict[Any, ...], key: Any) -> None:
 
 def _validate_sequence(sequence: str) -> bool:
     middle_index: int = int(len(sequence) / 2) - 1
-    if sequence[middle_index : middle_index + 2] != "CG" or "N" in sequence:
-        return False
-
-    return True
+    return not (sequence[middle_index:middle_index + 2] != "CG" or "N" in sequence)
 
 
 def _retrieve_chromosome_sequences(

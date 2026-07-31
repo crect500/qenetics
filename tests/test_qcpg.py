@@ -29,7 +29,7 @@ def test_prepare_training(
             batch_size=2,
             epochs=2,
         )
-    training_loader, validation_loader, model, optimizer = (
+    _training_loader, _validation_loader, _model, _optimizer = (
         qcpg._prepare_training(training_parameters)
     )
 

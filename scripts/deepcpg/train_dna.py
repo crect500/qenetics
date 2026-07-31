@@ -1,6 +1,6 @@
+import json
 from argparse import ArgumentParser, Namespace
 from dataclasses import dataclass
-import json
 from pathlib import Path
 
 from qenetics.deepcpg import train

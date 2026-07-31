@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from qenetics.tools import dna, data
+from qenetics.tools import data, dna
 
 
 @pytest.fixture

@@ -1,8 +1,8 @@
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from h5py import File
 import numpy as np
+from h5py import File
 from numpy.typing import NDArray
 
 from qenetics.tools import converters

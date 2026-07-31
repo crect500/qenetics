@@ -1,10 +1,10 @@
-from glob import glob
 import logging
+from glob import glob
 from pathlib import Path
 
-from h5py import File
 import numpy as np
 import polars as pl
+from h5py import File
 
 from qenetics.tools.data import (
     UNIQUE_NUCLEOTIDE_QUANTITY,
@@ -22,9 +22,8 @@ def read_quantity_examples_per_chromosome(
         split: list[str] = filepath.stem.split("_")
         chromosome: str = split[0]
         max_example_quantity = int(split[1].split("-")[1])
-        if chromosome in quantity_per_chromosome.keys():
-            if max_example_quantity > quantity_per_chromosome[chromosome]:
-                quantity_per_chromosome[chromosome] = max_example_quantity
+        if chromosome in quantity_per_chromosome:
+            quantity_per_chromosome[chromosome] = max(quantity_per_chromosome[chromosome], max_example_quantity)
         else:
             quantity_per_chromosome[chromosome] = max_example_quantity
 
@@ -32,7 +31,7 @@ def read_quantity_examples_per_chromosome(
 
 
 def _determine_sequence_length(deepcpg_directory: Path) -> int:
-    with File(list(deepcpg_directory.iterdir())[0]) as dataset:
+    with File(next(iter(deepcpg_directory.iterdir()))) as dataset:
         return dataset["inputs"]["dna"].shape[1]
 
 
@@ -78,7 +77,7 @@ def extract_deepcpg_experiment_to_qcpg(
         for filepath in deepcpg_filepaths:
             logger.debug("Processing file %s", str(filepath))
             with File(filepath) as deepcpg_dataset:
-                if experiment_name not in deepcpg_dataset["outputs"].keys():
+                if experiment_name not in deepcpg_dataset["outputs"]:
                     raise RuntimeError(
                         "Experiment %s not found in file %s",
                         experiment_name,

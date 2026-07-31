@@ -2,8 +2,8 @@ from argparse import ArgumentParser, Namespace
 from pathlib import Path
 
 from qenetics.deepcpg.deepcpg_utils import (
-    create_sequence_dataset,
     create_dataset_from_directory,
+    create_sequence_dataset,
 )
 
 

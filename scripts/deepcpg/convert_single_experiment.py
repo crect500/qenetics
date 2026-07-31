@@ -1,5 +1,5 @@
-from argparse import ArgumentParser, Namespace
 import logging
+from argparse import ArgumentParser, Namespace
 from pathlib import Path
 
 from qenetics.tools.converters import extract_deepcpg_experiment_to_qcpg

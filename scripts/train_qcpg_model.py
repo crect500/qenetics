@@ -1,5 +1,5 @@
-from argparse import ArgumentParser, Namespace
 import logging
+from argparse import ArgumentParser, Namespace
 from pathlib import Path
 
 from qenetics.qcpg import qcpg
@@ -75,6 +75,14 @@ def _parse_script_args() -> Namespace:
         type=str,
         default="probability",
         help="'probability' for state probabilities, 'expectation' for observables.",
+    )
+    parser.add_argument(
+        "--diff-method",
+        dest="diff_method",
+        required=False,
+        type=str,
+        default="adjoint",
+        help="The differentiation method for the Pennylane QNodes."
     )
     parser.add_argument(
         "--max-iterations",
@@ -197,6 +205,7 @@ if __name__ == "__main__":
             entangler=args.entangler,
             encoding=args.encoding,
             measurement=args.measurement,
+            diff_method=args.diff_method,
             layer_quantity=args.layer_quantity,
             epochs=args.max_iterations,
             batch_size=args.batch_size,

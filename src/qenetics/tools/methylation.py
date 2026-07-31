@@ -1,7 +1,7 @@
+from collections.abc import Generator
 from dataclasses import dataclass
 from enum import IntEnum
 from pathlib import Path
-from typing import Generator
 
 
 class MethylationFormat(IntEnum):
@@ -190,7 +190,7 @@ def retrieve_methylation_data(
     """
     data_format: MethylationFormat = determine_format(methylation_filepath)
     with open(methylation_filepath) as fd:
-        for line in fd.readlines():
+        for line in fd:
             methylation_information: MethylationInfo | None = (
                 process_methylation_line(line, data_format, minimum_samples)
             )
@@ -293,7 +293,7 @@ def convert_methylation_profiles(
         open(input_filepath) as input_fd,
         open(output_filepath, "w") as output_fd,
     ):
-        for line in input_fd.readlines():
+        for line in input_fd:
             read_methylation: MethylationInfo | None = process_methylation_line(
                 line, input_format, minimum_samples
             )

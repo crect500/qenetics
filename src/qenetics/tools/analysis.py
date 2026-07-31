@@ -1,7 +1,7 @@
+import csv
 from dataclasses import dataclass
 from glob import glob
 from pathlib import Path
-import csv
 
 import h5py
 import polars as pl
