@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class TrainingParameters:
     data_directory: Path
-    output_filepath: Path
+    output_directory: Path
     training_chromosomes: list[str] = field(
         default_factory=lambda: ["1", "3", "5", "7", "9", "11"]
     )
@@ -331,7 +331,7 @@ def _prepare_training(
         measurement=training_parameters.measurement,
         device_name=training_parameters.device_name,
         distribute=training_parameters.distributed,
-        diff_method=training_parameters.diff_method
+        diff_method=training_parameters.diff_method,
     )
     if rank is not None:
         model = model.to(rank)
@@ -499,7 +499,7 @@ def _train_all_epochs(
     training_loader: DataLoader,
     validation_loader: DataLoader,
     optimizer: optim.Optimizer,
-    output_filepath: Path,
+    output_directory: Path,
     training_parameters: TrainingParameters,
     rank: int | None = None,
 ) -> None:
@@ -521,9 +521,9 @@ def _train_all_epochs(
             f"{average_validation_loss}, Validation AUC: {average_auc}"
         )
         if training_parameters.gpu_quantity > 1 and rank == 0:
-            torch.save(model.module.state_dict(), output_filepath)
+            torch.save(model.module.state_dict(), output_directory / "model.pt")
         else:
-            torch.save(model.state_dict(), output_filepath)
+            torch.save(model.state_dict(), output_directory / "model.pt")
 
 
 def _single_distributed_gpu_train_qcpg_circuit(
@@ -548,7 +548,7 @@ def _single_distributed_gpu_train_qcpg_circuit(
         training_loader=training_loader,
         validation_loader=validation_loader,
         optimizer=optimizer,
-        output_filepath=training_parameters.output_filepath,
+        output_directory=training_parameters.output_directory,
         training_parameters=training_parameters,
         rank=rank,
     )
@@ -606,7 +606,7 @@ def train_qnn_circuit(training_parameters: TrainingParameters) -> None:
             training_loader=training_loader,
             validation_loader=validation_loader,
             optimizer=optimizer,
-            output_filepath=training_parameters.output_filepath,
+            output_directory=training_parameters.output_directory,
             training_parameters=training_parameters,
             rank=rank,
         )

@@ -2,7 +2,8 @@ import logging
 from argparse import ArgumentParser, Namespace
 from pathlib import Path
 
-from qenetics.qcpg import qcpg
+from qenetics.qcpg.qcpg import TrainingParameters
+from qenetics.tools import training_eval
 
 UNIQUE_NUCLEOTIDE_QUANTITY: int = 4
 
@@ -103,8 +104,8 @@ def _parse_script_args() -> Namespace:
     )
     parser.add_argument(
         "-o",
-        "--output-directory",
-        dest="output_directory",
+        "--output-filepath",
+        dest="output_filepath",
         required=True,
         type=Path,
         help="The path at which to save the trained parameters.",
@@ -152,6 +153,13 @@ def _parse_script_args() -> Namespace:
         help="The training batch size.",
     )
     parser.add_argument(
+        "--stop-after",
+        dest="stop_after",
+        required=False,
+        type=int,
+        help="Stop the evaluation after this many batches.",
+    )
+    parser.add_argument(
         "--log-directory",
         dest="log_directory",
         required=False,
@@ -196,27 +204,27 @@ if __name__ == "__main__":
         device_name = "lightning.qubit"
         distribute = False
 
-    qcpg.train_qnn_circuit(
-        qcpg.TrainingParameters(
-            data_directory=args.data_directory,
-            output_directory=args.output_directory,
-            training_chromosomes=args.training_chromosomes,
-            validation_chromosomes=args.validation_chromosomes,
-            entangler=args.entangler,
-            encoding=args.encoding,
-            measurement=args.measurement,
-            diff_method=args.diff_method,
-            layer_quantity=args.layer_quantity,
-            epochs=args.max_iterations,
-            batch_size=args.batch_size,
-            learning_rate=args.learning_rate,
-            l1_regularizer=args.l1_regularization,
-            l2_regularizer=args.l2_regularization,
-            model_filepath=args.model_filepath,
-            log_directory=args.log_directory,
-            log_level=log_level,
-            gpu_quantity=args.gpu_quantity,
-            device_name=device_name,
-            distributed=distribute,
-        )
+    training_parameters = TrainingParameters(
+        data_directory=args.data_directory,
+        output_filepath=args.output_filepath,
+        training_chromosomes=args.training_chromosomes,
+        validation_chromosomes=args.validation_chromosomes,
+        entangler=args.entangler,
+        encoding=args.encoding,
+        measurement=args.measurement,
+        diff_method=args.diff_method,
+        layer_quantity=args.layer_quantity,
+        epochs=args.max_iterations,
+        batch_size=args.batch_size,
+        learning_rate=args.learning_rate,
+        l1_regularizer=args.l1_regularization,
+        l2_regularizer=args.l2_regularization,
+        model_filepath=args.model_filepath,
+        log_directory=args.log_directory,
+        log_level=log_level,
+        gpu_quantity=args.gpu_quantity,
+        device_name=device_name,
+        distributed=distribute,
     )
+
+    training_eval.eval_grads(training_parameters, args.stop_after)

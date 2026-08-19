@@ -40,7 +40,7 @@ class QNN(nn.Module):
             encoding=encoding,
             entangling=entangler,
             measurement=measurement,
-            diff_method=diff_method
+            diff_method=diff_method,
         )
 
         wire_quantity: int = (
@@ -300,7 +300,7 @@ def define_torch_qnode(
     encoding: str = "amplitude",
     entangling: str = "basic",
     measurement: str = "probability",
-    diff_method="adjoint"
+    diff_method="adjoint",
 ) -> qml.qnn.TorchLayer:
     wire_quantity: int = _determine_wire_quantity(sequence_length, encoding)
     device: qml.devices.Device = _device_setup(
