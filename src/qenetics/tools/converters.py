@@ -1,10 +1,11 @@
 import logging
+from collections.abc import Sequence
 from glob import glob
 from pathlib import Path
 
+import h5py
 import numpy as np
 import polars as pl
-from h5py import File
 
 from qenetics.tools.data import (
     UNIQUE_NUCLEOTIDE_QUANTITY,
@@ -23,7 +24,9 @@ def read_quantity_examples_per_chromosome(
         chromosome: str = split[0]
         max_example_quantity = int(split[1].split("-")[1])
         if chromosome in quantity_per_chromosome:
-            quantity_per_chromosome[chromosome] = max(quantity_per_chromosome[chromosome], max_example_quantity)
+            quantity_per_chromosome[chromosome] = max(
+                quantity_per_chromosome[chromosome], max_example_quantity
+            )
         else:
             quantity_per_chromosome[chromosome] = max_example_quantity
 
@@ -31,7 +34,7 @@ def read_quantity_examples_per_chromosome(
 
 
 def _determine_sequence_length(deepcpg_directory: Path) -> int:
-    with File(next(iter(deepcpg_directory.iterdir()))) as dataset:
+    with h5py.File(next(iter(deepcpg_directory.iterdir()))) as dataset:
         return dataset["inputs"]["dna"].shape[1]
 
 
@@ -76,7 +79,7 @@ def extract_deepcpg_experiment_to_qcpg(
         ]
         for filepath in deepcpg_filepaths:
             logger.debug("Processing file %s", str(filepath))
-            with File(filepath) as deepcpg_dataset:
+            with h5py.File(filepath) as deepcpg_dataset:
                 if experiment_name not in deepcpg_dataset["outputs"]:
                     raise RuntimeError(
                         "Experiment %s not found in file %s",
@@ -129,7 +132,7 @@ def extract_deepcpg_experiment_to_qcpg(
                 {"rounded_methylation_ratios": "methylation_ratios"}
             )
 
-        with File(qcpg_directory / f"chr{chromosome}.h5", "w") as qcpg_fd:
+        with h5py.File(qcpg_directory / f"chr{chromosome}.h5", "w") as qcpg_fd:
             qcpg_fd.create_dataset(
                 "methylation_sequences",
                 shape=(
@@ -145,4 +148,76 @@ def extract_deepcpg_experiment_to_qcpg(
                 shape=len(current_data["methylation_ratios"]),
                 dtype=h5_truth_dtype,
                 data=current_data["methylation_ratios"],
+            )
+
+
+def _one_hot_to_integer(
+    one_hot_encoding: Sequence, *, include_zero: bool = False
+) -> np.ndarray:
+    for index, value in enumerate(one_hot_encoding):
+        if value == 1:
+            if include_zero:
+                return index + 1
+            else:
+                return index
+
+    if not include_zero:
+        raise ValueError(
+            f"Improper one-hot encoding for array {one_hot_encoding}"
+        )
+
+    return 0
+
+
+def _one_hot_sequence_to_integers(
+    one_hot_sequences: Sequence, *, include_zero: bool = False
+) -> np.ndarray:
+    return np.array(
+        [
+            _one_hot_to_integer(encoding, include_zero=include_zero)
+            for encoding in one_hot_sequences
+        ],
+        dtype=np.int8,
+    )
+
+
+def h5_one_hot_to_integer(
+    input_filepath: Path, output_directory: Path, *, include_zero: bool = False
+) -> None:
+    methylation_sequences_str: str = "methylation_sequences"
+    methylation_ratios_str: str = "methylation_ratios"
+    output_filepath: Path = output_directory / input_filepath.name
+    with (
+        h5py.File(input_filepath) as input_dataset,
+        h5py.File(output_filepath, "w") as output_fd,
+    ):
+        if isinstance(input_dataset[methylation_ratios_str], h5py.Group):
+            ratios_group: h5py.Group = output_fd.create_group(
+                methylation_ratios_str
+            )
+            for experiment_name in input_dataset[methylation_ratios_str]:
+                ratios_group.create_dataset(
+                    experiment_name,
+                    data=input_dataset[methylation_ratios_str][experiment_name],
+                )
+        else:
+            output_fd.create_dataset(
+                methylation_ratios_str,
+                data=input_dataset[methylation_ratios_str],
+            )
+
+        samples_quantity: int = input_dataset[methylation_sequences_str].shape[
+            0
+        ]
+        sequence_length: int = input_dataset[methylation_sequences_str].shape[1]
+        output_sequences: h5py.Dataset = output_fd.create_dataset(
+            methylation_sequences_str,
+            shape=(samples_quantity, sequence_length),
+            dtype="i8",
+        )
+        for index, sample in enumerate(
+            input_dataset[methylation_sequences_str]
+        ):
+            output_sequences[index] = _one_hot_sequence_to_integers(
+                sample, include_zero=include_zero
             )
