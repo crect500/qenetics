@@ -5,42 +5,301 @@ from unittest import mock
 import h5py
 import numpy as np
 import pytest
-from numpy.typing import NDArray
+from torch import Tensor
 from torch.utils.data import DataLoader
+from transformers import AutoTokenizer
 
 from qenetics.tools import data
 
 
-def test_H5CpGDataset(test_qcpg_dataset_directory: Path) -> None:
+def test_QuantumTorchDataset(
+    test_qcpg_dataset_directory: Path, test_methylation_h5_file: Path
+) -> None:
+    tokenizer = AutoTokenizer.from_pretrained("PoetschLab/GROVER")
     test_files: list[Path] = [
         test_qcpg_dataset_directory / f"chr{i}.h5" for i in ["1", "2"]
     ]
-    dataset = data.H5CpGDataset(test_files)
+    dataset = data.QuantumTorchDataset(test_files, allow_N=True)
+    assert dataset.data.shape == (16, 10)
+    assert dataset.labels.shape == (16, 4)
+    assert dataset.labels.sum() == 24
+
+    dataset = data.QuantumTorchDataset(
+        test_files, encoding=data.ONEHOT_ENCODING_STR, allow_N=True
+    )
     assert dataset.data.shape == (16, 10, 4)
     assert dataset.data.sum() == 128.0
     assert dataset.labels.shape == (16, 4)
     assert dataset.labels.sum() == 24
-    assert len(dataset) == 16
-    cpg_data, labels = dataset[0]
-    assert (cpg_data == data.nucleotide_string_to_numpy("NATCGNATCG")).all()
-    assert list(labels) == [0.0, 0.0, 1.0, 1.0]
+
+    dataset = data.QuantumTorchDataset(
+        test_files, encoding=data.BPE_ENCODING_STR, tokenizer=tokenizer
+    )
+    assert dataset.data.shape == (16, 10)
+
+    dataset = data.QuantumTorchDataset(
+        [test_methylation_h5_file, test_methylation_h5_file]
+    )
+    assert dataset.data.shape == (8, 8)
+
+    dataset = data.QuantumTorchDataset(
+        [test_methylation_h5_file, test_methylation_h5_file],
+        encoding=data.ONEHOT_ENCODING_STR,
+    )
+    assert dataset.data.shape == (8, 8, 4)
+    assert dataset.data.sum() == 64.0
+
+    dataset = data.QuantumTorchDataset(
+        [test_methylation_h5_file, test_methylation_h5_file],
+        encoding=data.BPE_ENCODING_STR,
+        tokenizer=tokenizer,
+    )
+    assert dataset.data.shape == (8, 8)
 
 
 def test_h5_cpg_data_loader(test_qcpg_dataset_directory: Path) -> None:
     test_files: list[Path] = [
         test_qcpg_dataset_directory / f"chr{i}.h5" for i in ["1", "2"]
     ]
-    data_loader = DataLoader(data.H5CpGDataset(test_files), batch_size=1)
+    data_loader = DataLoader(data.QuantumTorchDataset(test_files), batch_size=1)
     for test_samples in data_loader:
         test_sequences, test_labels = test_samples
         assert test_sequences.shape == (1, 10, 4)
         assert test_labels.shape == (1, 4)
 
-    data_loader = DataLoader(data.H5CpGDataset(test_files), batch_size=2)
+    data_loader = DataLoader(data.QuantumTorchDataset(test_files), batch_size=2)
     for test_samples in data_loader:
         test_sequences, test_labels = test_samples
         assert test_sequences.shape == (2, 10, 4)
         assert test_labels.shape == (2, 4)
+
+
+@pytest.mark.parametrize(
+    ("filestrings", "expected_result"),
+    [
+        ([], "empty"),
+        (["unsupported.f6"], "unsupported"),
+        (["h5_file.h5", "csv_file.csv"], "inhomogeneous"),
+        (["file.h5"], "h5"),
+        (["file1.h5", "file2.h5"], "h5"),
+    ],
+)
+def test_check_file_types(filestrings: list[str], expected_result: str) -> None:
+    with TemporaryDirectory() as temp_dir:
+        temp_path = Path(temp_dir)
+        filepaths: list[Path] = [
+            temp_path / filestring for filestring in filestrings
+        ]
+
+    if expected_result == "empty":
+        with pytest.raises(ValueError, match="No filepaths provided"):
+            _ = data._check_file_types(filepaths)
+    elif expected_result == "unsupported":
+        with pytest.raises(
+            NotImplementedError,
+            match=r"Unsupported file format or mixed file formats in files",
+        ):
+            _ = data._check_file_types(filepaths)
+    elif expected_result == "inhomogeneous":
+        with pytest.raises(
+            ValueError, match=r"Inhomogeneous file type found for filepath"
+        ):
+            _ = data._check_file_types(filepaths)
+    else:
+        assert data._check_file_types(filepaths) == expected_result
+
+
+def test_find_h5_sample_key(
+    test_inputs_h5_file: Path, test_methylation_h5_file: Path
+) -> None:
+    with h5py.File(test_inputs_h5_file) as dataset:
+        assert data._find_h5_samples_key(dataset) == data.INPUTS_STR
+    with h5py.File(test_methylation_h5_file) as dataset:
+        assert data._find_h5_samples_key(dataset) == data.METHYLATION_STR
+    with TemporaryDirectory() as temp_dir:
+        temp_path = Path(temp_dir) / "invalid.h5"
+        with h5py.File(temp_path, "w") as fd:
+            fd.create_dataset("invalid_name", shape=(10, 16), dtype="i4")
+
+        with (
+            h5py.File(temp_path) as dataset,
+            pytest.raises(
+                RuntimeError, match="Sequence samples dataset not found"
+            ),
+        ):
+            _ = data._find_h5_samples_key(dataset)
+
+
+def test_determine_h5_dimensions_and_type(
+    test_inputs_h5_file: Path, test_methylation_h5_file: Path
+) -> None:
+    assert data._determine_h5_dimensions_and_type(
+        test_inputs_h5_file, data.INPUTS_STR
+    ) == (2, np.int64)
+    assert data._determine_h5_dimensions_and_type(
+        test_methylation_h5_file, data.METHYLATION_STR
+    ) == (3, np.int8)
+
+
+@pytest.mark.parametrize(
+    ("dtype", "expected_result"),
+    [
+        (np.int8, True),
+        (np.int16, True),
+        (np.int32, True),
+        (np.int64, True),
+        (np.float32, False),
+    ],
+)
+def test_check_np_int(
+    dtype: np.typing.DTypeLike, expected_result: bool
+) -> None:
+    assert data._check_np_int(dtype) == expected_result
+
+
+def test_determine_h5_sample_encoding(
+    test_inputs_h5_file: Path, test_methylation_h5_file: Path
+) -> None:
+    assert (
+        data._determine_h5_sample_encoding(
+            [test_inputs_h5_file, test_inputs_h5_file], data.INPUTS_STR
+        )
+        == data.TOKEN_ENCODING_STR
+    )
+    assert (
+        data._determine_h5_sample_encoding(
+            [test_methylation_h5_file, test_methylation_h5_file],
+            data.METHYLATION_STR,
+        )
+        == data.ONEHOT_ENCODING_STR
+    )
+
+
+def test_determine_sample_encoding(test_inputs_h5_file: Path) -> None:
+    with mock.patch(
+        "qenetics.tools.data._determine_h5_sample_encoding"
+    ) as mock_h5:
+        mock_h5.return_value = True
+        _ = data._determine_sample_encoding(
+            [test_inputs_h5_file, test_inputs_h5_file],
+            data.H5_STR,
+            data.INPUTS_STR,
+        )
+        mock_h5.assert_called_once()
+
+    with pytest.raises(
+        NotImplementedError, match=r"File parsing not implemented for file type"
+    ):
+        _ = data._determine_sample_encoding([], "invalid_format", "")
+
+
+def test_determine_dataset_sample_quantity(
+    test_inputs_h5_file: Path, test_methylation_h5_file: Path
+) -> None:
+    with h5py.File(test_inputs_h5_file) as dataset:
+        assert (
+            data._determine_dataset_sample_quantity(dataset, data.INPUTS_STR)
+            == 10
+        )
+
+    with h5py.File(test_methylation_h5_file) as dataset:
+        assert (
+            data._determine_dataset_sample_quantity(
+                dataset, data.METHYLATION_STR
+            )
+            == 4
+        )
+
+
+def test_determine_sample_quantity(test_inputs_h5_file: Path) -> None:
+    assert (
+        data._determine_sample_quantity(
+            [test_inputs_h5_file, test_inputs_h5_file],
+            data.H5_STR,
+            data.INPUTS_STR,
+        )
+        == 20
+    )
+
+
+def test_convert_token_dataset_to_onehot(test_inputs_h5_file: Path) -> None:
+    with h5py.File(test_inputs_h5_file) as dataset:
+        samples: Tensor = data._convert_token_dataset_to_onehot(
+            dataset, data.INPUTS_STR
+        )
+
+    assert samples.shape == (10, 16, 4)
+
+    with (
+        h5py.File(test_inputs_h5_file) as dataset,
+        pytest.raises(
+            ValueError,
+            match="Conversion to one-hot encoding is not supported for H5 structure invalid",
+        ),
+    ):
+        _ = data._convert_token_dataset_to_onehot(dataset, "invalid")
+
+
+def test_convert_onehot_dataset_to_token(
+    test_methylation_h5_file: Path,
+) -> None:
+    with h5py.File(test_methylation_h5_file) as dataset:
+        samples: Tensor = data._convert_onehot_dataset_to_token(
+            dataset, data.METHYLATION_STR
+        )
+
+    assert samples.shape == (4, 8)
+
+    with (
+        h5py.File(test_methylation_h5_file) as dataset,
+        pytest.raises(
+            ValueError,
+            match="Conversion to token encoding is not supported for H5 structure invalid",
+        ),
+    ):
+        _ = data._convert_onehot_dataset_to_token(dataset, "invalid")
+
+
+def test_convert_token_dataset_to_bpe(test_inputs_h5_file: Path) -> None:
+    tokenizer: AutoTokenizer = AutoTokenizer.from_pretrained(
+        "PoetschLab/GROVER"
+    )
+    with h5py.File(test_inputs_h5_file) as dataset:
+        samples: Tensor = data._convert_token_dataset_to_bpe(
+            dataset, tokenizer, data.INPUTS_STR
+        )
+
+    assert samples.shape == (10, 16)
+
+    with (
+        h5py.File(test_inputs_h5_file) as dataset,
+        pytest.raises(
+            ValueError,
+            match="BPE token conversion is not supported for H5 structure invalid",
+        ),
+    ):
+        _ = data._convert_token_dataset_to_bpe(dataset, tokenizer, "invalid")
+
+
+def test_convert_onehot_dataset_to_bpe(test_methylation_h5_file: Path) -> None:
+    tokenizer: AutoTokenizer = AutoTokenizer.from_pretrained(
+        "PoetschLab/GROVER"
+    )
+    with h5py.File(test_methylation_h5_file) as dataset:
+        samples: Tensor = data._convert_onehot_dataset_to_bpe(
+            dataset, tokenizer, data.METHYLATION_STR
+        )
+
+    assert samples.shape == (4, 8)
+
+    with (
+        h5py.File(test_methylation_h5_file) as dataset,
+        pytest.raises(
+            ValueError,
+            match="BPE token conversion is not supported for H5 structure invalid",
+        ),
+    ):
+        _ = data._convert_onehot_dataset_to_bpe(dataset, tokenizer, "invalid")
 
 
 def test_retrieve_chromosome_sequences() -> None:
@@ -78,122 +337,6 @@ def test_retrieve_chromosome_sequences() -> None:
     assert sequences.shape == (2, sequence_length, unique_nucleotides_quantity)
     assert methylation_ratios[0][0] == 0.0
     assert methylation_ratios[1][2] == 1.0
-
-
-@pytest.mark.parametrize(
-    ("nucleotide", "expected_int"),
-    [("A", 0), ("T", 1), ("C", 2), ("G", 3), ("N", -1), ("x", -2)],
-)
-def test_nucleotide_character_to_numpy(
-    nucleotide: str, expected_int: int
-) -> None:
-    if expected_int > -1:
-        expected_array: NDArray[int] = np.array([0] * 4, dtype=int)
-        expected_array[expected_int] = 1
-        assert (
-            data.nucleotide_character_to_numpy(nucleotide) == expected_array
-        ).all()
-    elif expected_int == -1:
-        assert (
-            data.nucleotide_character_to_numpy(nucleotide)
-            == np.array([0] * 4, dtype=int)
-        ).all()
-    else:
-        with pytest.raises(
-            ValueError,
-            match=f"{nucleotide} is not a valid nucleotide designator",
-        ):
-            _ = data.nucleotide_character_to_numpy(nucleotide)
-
-
-@pytest.mark.parametrize(
-    ("sequence", "expected_array"),
-    [
-        ("A", [0]),
-        ("AT", [0, 1]),
-        ("ATC", [0, 1, 2]),
-        ("ATCG", [0, 1, 2, 3]),
-        ("NATCGN", [-1, 0, 1, 2, 3, -1]),
-    ],
-)
-def test_nucleotide_string_to_numpy(
-    sequence: str, expected_array: list[int]
-) -> None:
-    one_hot_matrix: NDArray[int] = data.nucleotide_string_to_numpy(sequence)
-    if len(expected_array) == 0:
-        assert one_hot_matrix is None
-    else:
-        working_matrix: list[list[int]] = []
-        for nucleotide in expected_array:
-            working_array: list[int] = [0] * 4
-            if nucleotide != -1:
-                working_array[nucleotide] = 1
-            working_matrix.append(working_array)
-        assert (one_hot_matrix == np.array(working_matrix, dtype=int)).all()
-
-
-@pytest.mark.parametrize(
-    ("nucleotide_integer"),
-    [0, 1, 2, 3, -1, -2],
-)
-def test_nucleotide_integer_to_numpy(nucleotide_integer: int) -> None:
-    if nucleotide_integer > -1:
-        expected_array: NDArray[int] = np.array([0] * 4, dtype=int)
-        expected_array[nucleotide_integer] = 1
-        assert (
-            data.nucleotide_integer_to_numpy(nucleotide_integer)
-            == expected_array
-        ).all()
-    elif nucleotide_integer == -1:
-        assert (
-            data.nucleotide_integer_to_numpy(nucleotide_integer)
-            == np.array([0] * 4, dtype=int)
-        ).all()
-    else:
-        with pytest.raises(
-            ValueError,
-            match=f"{nucleotide_integer} is not a valid nucleotide designator",
-        ):
-            _ = data.nucleotide_integer_to_numpy(nucleotide_integer)
-
-
-@pytest.mark.parametrize(
-    ("sequence"),
-    [
-        [0],
-        [0, 1],
-        [0, 1, 2],
-        [0, 1, 2, 3],
-        [-1, 0, 1, 2, 3, -1],
-    ],
-)
-def test_nucleotide_array_to_numpy(sequence: list[int]) -> None:
-    one_hot_matrix: NDArray[int] = data.nucleotide_array_to_numpy(sequence)
-    working_matrix: list[list[int]] = []
-    for nucleotide in sequence:
-        working_array: list[int] = [0] * 4
-        if nucleotide != -1:
-            working_array[nucleotide] = 1
-        working_matrix.append(working_array)
-    assert (one_hot_matrix == np.array(working_matrix, dtype=int)).all()
-
-
-@pytest.mark.parametrize(
-    ("threshold", "quantity_methylated"), [(0.0, 3), (0.5, 2), (1.0, 1)]
-)
-def test_samples_to_numpy(
-    threshold: float, quantity_methylated: int, test_input_file: Path
-) -> None:
-    valid_samples: int = 3
-    sequence_length: int = 12
-    unique_nucleotides_quantity: int = 4
-    samples, methylations = data.samples_to_numpy(test_input_file, threshold)
-    assert np.sum(methylations) == quantity_methylated
-    assert samples.shape == (
-        valid_samples,
-        sequence_length,
-        unique_nucleotides_quantity,
-    )
 
 
 @pytest.mark.parametrize(

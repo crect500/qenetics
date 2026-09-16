@@ -1,18 +1,278 @@
 import logging
 from collections.abc import Sequence
+from csv import DictReader
 from glob import glob
+from math import sqrt
 from pathlib import Path
 
 import h5py
 import numpy as np
 import polars as pl
+from numpy.typing import NDArray
 
-from qenetics.tools.data import (
-    UNIQUE_NUCLEOTIDE_QUANTITY,
-    nucleotide_array_to_numpy,
-)
+UNIQUE_NUCLEOTIDE_QUANTITY: int = 4
 
 logger = logging.getLogger(__name__)
+
+
+def nucleotide_character_to_numpy(
+    nucleotide: str,
+    encoding: str = "amplitude",
+) -> NDArray[int]:
+    """
+    Convert a nucleotide designator to a one-hot array.
+
+    Args
+    ----
+    nucleotide: The ASCII nucleotide designator.
+
+    Returns
+    -------
+    The one-hot encoded array.
+    """
+    if nucleotide == "A":
+        return np.array([1, 0, 0, 0], dtype=int)
+    if nucleotide == "T":
+        return np.array([0, 1, 0, 0], dtype=int)
+    if nucleotide == "C":
+        return np.array([0, 0, 1, 0], dtype=int)
+    if nucleotide == "G":
+        return np.array([0, 0, 0, 1], dtype=int)
+    if nucleotide == "N":
+        if encoding == "amplitude":
+            equal_superposition: float = 1 / sqrt(2)
+            return np.array([equal_superposition] * 4, dtype=float)
+        else:
+            return np.array([0, 0, 0, 0], dtype=int)
+
+    raise ValueError(f"{nucleotide} is not a valid nucleotide designator")
+
+
+def nucleotide_string_to_numpy(
+    sequence: str, encoding: str = "amplitude"
+) -> NDArray[int] | None:
+    """
+    Convert a list of ASCII nucleotide designators to one-hot arrays.
+
+    Args
+    ----
+    sequence: A list of ASCII nucleotide designators.
+
+    Returns
+    -------
+    A matrix of one-hot encoded values.
+    """
+    return np.array(
+        [
+            nucleotide_character_to_numpy(nucleotide, encoding)
+            for nucleotide in sequence
+        ],
+        dtype=int,
+    )
+
+
+def nucleotide_integer_to_numpy(nucleotide: int) -> NDArray[int]:
+    """
+    Convert a nucleotide integer representation to a one-hot array.
+
+    Args
+    ----
+    nucleotide: The nucleotide integer.
+
+    Returns
+    -------
+    The one-hot encoded array.
+    """
+    if nucleotide == 0:
+        return np.array([1, 0, 0, 0], dtype=int)
+    if nucleotide == 1:
+        return np.array([0, 1, 0, 0], dtype=int)
+    if nucleotide == 2:
+        return np.array([0, 0, 1, 0], dtype=int)
+    if nucleotide == 3:
+        return np.array([0, 0, 0, 1], dtype=int)
+    if nucleotide == -1:
+        return np.array([0, 0, 0, 0], dtype=int)
+
+    raise ValueError(f"{nucleotide} is not a valid nucleotide designator")
+
+
+def nucleotide_array_to_numpy(sequence: Sequence[int]) -> NDArray[int] | None:
+    """
+    Convert a list of nucleotide integer representations to one-hot arrays.
+
+    Args
+    ----
+    sequence: A list of nucleotide integer representations.
+
+    Returns
+    -------
+    A matrix of one-hot encoded values.
+    """
+    return np.array(
+        [nucleotide_integer_to_numpy(nucleotide) for nucleotide in sequence],
+        dtype=int,
+    )
+
+
+def samples_to_numpy(
+    methylation_filepath: Path, threshold: float = 0.5
+) -> tuple[NDArray[int], NDArray[int]]:
+    """
+    Create input and truth samples for sequences of nucleotides and their methylations.
+
+    Args
+    ----
+    methylation_filepath: The filepath of a file containing methylation_profiles.
+    threshold: The threshold at which to consider a site methylated.
+
+    Returns
+    -------
+    A matrix of one-hot input sample encodings and the truth values.
+    """
+    logger.debug(
+        f"Loading methylation data from {methylation_filepath} with threshold "
+        f"{threshold}."
+    )
+    with open(methylation_filepath) as fd:
+        csv_reader = DictReader(fd)
+        read_data: list[tuple[NDArray[int], NDArray[int]]] = [
+            (
+                nucleotide_string_to_numpy(line["sequence"]),
+                np.array(
+                    0 if float(line["ratio_methylated"]) < threshold else 1,
+                    dtype=int,
+                ),
+            )
+            for line in csv_reader
+        ]
+        return np.array(
+            [row[0] for row in read_data if row[0] is not None], dtype=int
+        ), np.array(
+            [row[1] for row in read_data if row[0] is not None], dtype=int
+        )
+
+
+def _integer_to_nucleotide_char(value: int, allow_N: bool = False) -> str:
+    """
+    Convert an integer representation to its corresponding nucleotide character.
+
+    Args
+    ----
+    value: The value to convert.
+    allow_N: Allow the character 'N' to represent an unknown nucleotide.
+
+    Returns
+    -------
+    The nucleotide character.
+
+    Raises
+    ------
+    ValueError if an invalid integer is provided.
+    """
+    if value == 0:
+        return "A"
+    if value == 1:
+        return "T"
+    if value == 2:
+        return "C"
+    if value == 3:
+        return "G"
+
+    if value == -1:
+        if allow_N:
+            return "N"
+        else:
+            raise ValueError(
+                f"Invalid value {value}. To allow nucleotide value 'N' to be valid, set `allow_N` to True"
+            )
+
+    raise ValueError(f"Invalid value {value}")
+
+
+def integer_array_to_nucleotide_str(
+    values: Sequence[int], allow_N: bool = False
+) -> str:
+    """
+    Convert an integer array to its corresponding nucleotide sequence string.
+
+    Args
+    ----
+    value: The array to convert.
+    allow_N: Allow the character 'N' to represent an unknown nucleotide.
+
+    Returns
+    -------
+    The nucleotide string.
+    """
+    return "".join(
+        [
+            _integer_to_nucleotide_char(value, allow_N=allow_N)
+            for value in values
+        ]
+    )
+
+
+def _one_hot_to_nucleotide(
+    one_hot_array: Sequence[int | float], allow_N: bool = False
+) -> str:
+    """
+    Convert an one-hot representation to its corresponding nucleotide character.
+
+    Args
+    ----
+    value: The one-hot array to convert.
+    allow_N: Allow the character 'N' to represent an unknown nucleotide.
+
+    Returns
+    -------
+    The nucleotide character.
+
+    Raises
+    ------
+    ValueError if an invalid one-hot encoding is provided.
+    """
+    if all(one_hot_array == np.array([1, 0, 0, 0])):
+        return "A"
+    if all(one_hot_array == np.array([0, 1, 0, 0])):
+        return "T"
+    if all(one_hot_array == np.array([0, 0, 1, 0])):
+        return "C"
+    if all(one_hot_array == np.array([0, 0, 0, 1])):
+        return "G"
+
+    if all(np.array(one_hot_array) == np.array([0, 0, 0, 0])):
+        if allow_N:
+            return "N"
+        else:
+            raise ValueError(
+                f"Invalid one-hot encoding {one_hot_array}. To allow nucleotide value 'N' to be valid, set `allow_N` to True"
+            )
+
+    raise ValueError(f"Invalid one-hot encoding {one_hot_array}")
+
+
+def one_hot_sequence_to_nucleotide_str(
+    one_hot_sequence: Sequence[Sequence[int | float]], allow_N: bool = False
+) -> str:
+    """
+    Convert a one-hot encoded sequence to its corresponding nucleotide sequence string.
+
+    Args
+    ----
+    value: The one-hot encoded sequence to convert.
+    allow_N: Allow the character 'N' to represent an unknown nucleotide.
+
+    Returns
+    -------
+    The nucleotide string.
+    """
+    return "".join(
+        [
+            _one_hot_to_nucleotide(value, allow_N=allow_N)
+            for value in one_hot_sequence
+        ]
+    )
 
 
 def read_quantity_examples_per_chromosome(
@@ -152,16 +412,16 @@ def extract_deepcpg_experiment_to_qcpg(
 
 
 def _one_hot_to_integer(
-    one_hot_encoding: Sequence, *, include_zero: bool = False
+    one_hot_encoding: Sequence, *, allow_N: bool = False
 ) -> np.ndarray:
     for index, value in enumerate(one_hot_encoding):
         if value == 1:
-            if include_zero:
+            if allow_N:
                 return index + 1
             else:
                 return index
 
-    if not include_zero:
+    if not allow_N:
         raise ValueError(
             f"Improper one-hot encoding for array {one_hot_encoding}"
         )
@@ -169,12 +429,12 @@ def _one_hot_to_integer(
     return 0
 
 
-def _one_hot_sequence_to_integers(
-    one_hot_sequences: Sequence, *, include_zero: bool = False
+def one_hot_sequence_to_integers(
+    one_hot_sequences: Sequence, *, allow_N: bool = False
 ) -> np.ndarray:
     return np.array(
         [
-            _one_hot_to_integer(encoding, include_zero=include_zero)
+            _one_hot_to_integer(encoding, allow_N=allow_N)
             for encoding in one_hot_sequences
         ],
         dtype=np.int8,
@@ -182,7 +442,7 @@ def _one_hot_sequence_to_integers(
 
 
 def h5_one_hot_to_integer(
-    input_filepath: Path, output_directory: Path, *, include_zero: bool = False
+    input_filepath: Path, output_directory: Path, *, allow_N: bool = False
 ) -> None:
     methylation_sequences_str: str = "methylation_sequences"
     methylation_ratios_str: str = "methylation_ratios"
@@ -218,6 +478,6 @@ def h5_one_hot_to_integer(
         for index, sample in enumerate(
             input_dataset[methylation_sequences_str]
         ):
-            output_sequences[index] = _one_hot_sequence_to_integers(
-                sample, include_zero=include_zero
+            output_sequences[index] = one_hot_sequence_to_integers(
+                sample, allow_N=allow_N
             )

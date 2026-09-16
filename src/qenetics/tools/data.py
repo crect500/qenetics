@@ -1,11 +1,8 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterable
-from csv import DictReader
-from dataclasses import dataclass
+from collections.abc import Sequence
 from io import TextIOBase
-from math import sqrt
 from pathlib import Path
 from typing import Any
 
@@ -14,75 +11,171 @@ import numpy as np
 import torch
 from numpy.typing import NDArray
 from torch.utils.data import Dataset
+from transformers.tokenization_utils_tokenizers import TokenizersBackend
 
-from qenetics.tools import dna, methylation
+from qenetics.tools import converters, dna, methylation
 
 logger = logging.getLogger(__name__)
 
-UNIQUE_NUCLEOTIDE_QUANTITY: int = 4
 METHYLATION_SEQUENCES_KEY: str = "methylation_sequences"
 METHYLATION_RATIOS_KEY: str = "methylation_ratios"
+INPUTS_STR: str = "inputs"
+DNA_STR: str = "dna"
+METHYLATION_STR: str = "methylation_sequences"
+TOKEN_ENCODING_STR: str = "token"
+ONEHOT_ENCODING_STR: str = "one-hot"
+BPE_ENCODING_STR: str = "bpe"
+H5_STR: str = "h5"
 
 
-@dataclass
-class ChromosomeIndices:
-    start: int
-    end: int
+class QuantumTorchDataset(Dataset):
+    """
+    Facilitates processing a dataset of nucleotide sequences.
+    """
 
-
-class H5CpGDataset(Dataset):
     def __init__(
-        self: H5CpGDataset,
+        self: QuantumTorchDataset,
         filepaths: list[Path],
         threshold: float = 0.5,
+        encoding: str = TOKEN_ENCODING_STR,
+        *,
+        tokenizer: TokenizersBackend | None = None,
+        allow_N: bool = False,
     ) -> None:
+        """
+        Load a dataset for use in torch training pipelines.
+
+        Args
+        ----
+        filepaths: The files to load. Currently only 'h5' file formats are supported.
+        threshold: The threshold for the binary predictions.
+        encoding: The encoding method. Currently supported encodings are 'token', 'one-hot', and 'BPE.
+        tokenizer: The BPE tokenizer.
+        allow_N: Whether to allow N in the original dataset encoding.
+        """
+        file_format: str = _check_file_types(filepaths)
         self.file_list = filepaths
-        with h5py.File(filepaths[0]) as fd:
-            self.sequence_length = fd[METHYLATION_SEQUENCES_KEY].shape[1]
-            if isinstance(fd[METHYLATION_RATIOS_KEY], h5py.Group):
-                self.experiment_names = fd[METHYLATION_RATIOS_KEY].keys()
-                self.experiment_quantity = len(self.experiment_names)
-            else:
-                self.experiment_quantity = 1
+        if encoding == BPE_ENCODING_STR and tokenizer is None:
+            raise RuntimeError(
+                "Must specify tokenizer if BPE encoding is desired."
+            )
 
-        self.chromosome_indices = {}
-        self._allocate_tensors(filepaths)
-        self._fill_tensors(filepaths, threshold)
+        input_encoding, samples_key = self._retrieve_data_parameters(
+            filepaths, file_format
+        )
 
-    def __len__(self: H5CpGDataset) -> int:
+        self._allocate_tensors(filepaths, file_format, samples_key, encoding)
+        self._fill_tensors(
+            filepaths,
+            file_format,
+            input_encoding,
+            samples_key,
+            encoding,
+            threshold,
+            tokenizer=tokenizer,
+            allow_N=allow_N,
+        )
+
+    def __len__(self: QuantumTorchDataset) -> int:
         return len(self.data)
 
     def __getitem__(
-        self: H5CpGDataset, idx
+        self: QuantumTorchDataset, idx
     ) -> tuple[torch.Tensor, torch.Tensor]:
         if torch.is_tensor(idx):
             idx = idx.tolist()
         return self.data[idx], self.labels[idx]
 
-    def _allocate_tensors(self: H5CpGDataset, filepaths: list[Path]) -> None:
-        sample_quantity: int = 0
-        for filepath in filepaths:
-            with h5py.File(filepath) as fd:
-                new_sample_quantity: int = (
-                    sample_quantity + fd[METHYLATION_SEQUENCES_KEY].shape[0]
-                )
-                self.chromosome_indices[filepath.stem[3:]] = ChromosomeIndices(
-                    start=sample_quantity, end=new_sample_quantity
-                )
-                logger.debug(
-                    "Found %d samples in file %s",
-                    new_sample_quantity - sample_quantity,
-                    str(filepath),
-                )
-                sample_quantity = new_sample_quantity
+    def _retrieve_data_parameters(
+        self: QuantumTorchDataset, filepaths: Sequence[Path], file_format: str
+    ) -> tuple[str, str]:
+        """
+        Retrieve the sequence length, experiment names, and experiment quantity from the files.
 
-        self.data = torch.empty(
-            sample_quantity,
-            self.sequence_length,
-            UNIQUE_NUCLEOTIDE_QUANTITY,
-            dtype=torch.float,
-            requires_grad=False,
+        Args
+        ----
+        filepaths: The files to retrieve the parameters from.
+        file_format: The type of the files.
+
+        Returns
+        -------
+        The encoding method of the input and the H5 samples key, if applicable.
+
+        Raises
+        ------
+        RuntimeError if H5 file structure is not recognized.
+        NotImplementedError if file_format processing is not supported.
+        """
+        if file_format == H5_STR:
+            with h5py.File(filepaths[0]) as dataset:
+                self.sequence_length = dataset[METHYLATION_SEQUENCES_KEY].shape[
+                    1
+                ]
+                if isinstance(dataset[METHYLATION_RATIOS_KEY], h5py.Group):
+                    self.experiment_names = dataset[
+                        METHYLATION_RATIOS_KEY
+                    ].keys()
+                    self.experiment_quantity = len(self.experiment_names)
+                else:
+                    self.experiment_quantity = 1
+
+                try:
+                    samples_key: str = _find_h5_samples_key(dataset)
+                except RuntimeError as e:
+                    raise RuntimeError(f"{e} in file {filepaths[0]}")
+
+            input_encoding: str = _determine_sample_encoding(
+                filepaths, file_format, samples_key
+            )
+            return input_encoding, samples_key
+        else:
+            raise NotImplementedError(
+                f"Processing of {file_format} files is not implemented"
+            )
+
+    def _allocate_tensors(
+        self: QuantumTorchDataset,
+        filepaths: list[Path],
+        file_format: str,
+        samples_key: str,
+        encoding: str = TOKEN_ENCODING_STR,
+    ) -> None:
+        """
+        Allocate empty tensors to hold the sample data.
+
+        Args
+        ----
+        filepaths: The files to load into tensors.
+        file_format: The type of the files.
+        encoding: The encoding method. Currently supported encodings are 'token', 'one-hot', and 'BPE'.
+
+        Raises
+        ------
+        ValueError if encoding method is not supported.
+        """
+        sample_quantity = _determine_sample_quantity(
+            filepaths, file_format, samples_key
         )
+
+        if encoding in [TOKEN_ENCODING_STR, BPE_ENCODING_STR]:
+            self.data = torch.empty(
+                sample_quantity,
+                self.sequence_length,
+                dtype=torch.float,
+                requires_grad=False,
+            )
+        elif encoding == ONEHOT_ENCODING_STR:
+            self.data = torch.empty(
+                sample_quantity,
+                self.sequence_length,
+                converters.UNIQUE_NUCLEOTIDE_QUANTITY,
+                dtype=torch.float,
+                requires_grad=False,
+            )
+
+        else:
+            raise ValueError(f"Encoding method {encoding} not recognized")
+
         if self.experiment_quantity > 1:
             self.labels = torch.empty(
                 sample_quantity,
@@ -94,185 +187,681 @@ class H5CpGDataset(Dataset):
             self.labels = torch.empty(
                 sample_quantity, dtype=torch.float, requires_grad=False
             )
-        logger.debug("Initialized dataset with %d samples", sample_quantity)
+        logger.debug(
+            "Initialized dataset for %d samples of length %d with %s encoding",
+            sample_quantity,
+            self.sequence_length,
+            encoding,
+        )
 
     def _fill_tensors(
-        self: H5CpGDataset, filepaths: list[Path], threshold: float = 0.5
+        self: QuantumTorchDataset,
+        filepaths: list[Path],
+        file_format: str,
+        input_encoding: str,
+        samples_key: str,
+        encoding: str,
+        threshold: float,
+        *,
+        tokenizer: TokenizersBackend | None,
+        allow_N: bool = False,
     ) -> None:
+        """
+        Load the dataset into the pre-allocated tensors.
+
+        Args
+        ----
+        filepaths: The files to load into tensors.
+        file_format: The type of the files.
+        input_encoding: The encoding of the files to be loaded into tensors.
+        samples_key: The key that represents a certain H5 file structure.
+        encoding: The encoding method. Currently supported encodings are 'token', 'one-hot', and 'BPE'.
+        threshold: The threshold for the binary predictions.
+        tokenizer: The tokenizer used for BPE encodings.
+        allow_N: Whether to allow zero in the original dataset encoding.
+        """
+        current_index: int = 0
         for filepath in filepaths:
-            chromosome: str = filepath.stem[3:]
             logger.debug("Loading data from %s", str(filepath))
-            with h5py.File(filepath) as dataset:
-                self.data[
-                    self.chromosome_indices[
-                        chromosome
-                    ].start : self.chromosome_indices[chromosome].end,
-                    :,
-                    :,
-                ] = torch.tensor(
-                    dataset[METHYLATION_SEQUENCES_KEY],
-                    dtype=torch.float,
-                    requires_grad=False,
-                )
-                if self.experiment_quantity > 1:
-                    for label_index, experiment_name in enumerate(
-                        dataset[METHYLATION_RATIOS_KEY].keys()
-                    ):
+
+            if file_format == H5_STR:
+                with h5py.File(filepath) as dataset:
+                    file_sample_quantity: int = (
+                        _determine_dataset_sample_quantity(dataset, samples_key)
+                    )
+                    if input_encoding == TOKEN_ENCODING_STR:
+                        if encoding == TOKEN_ENCODING_STR:
+                            if samples_key == INPUTS_STR:
+                                self.data[
+                                    current_index : current_index
+                                    + file_sample_quantity,
+                                    :,
+                                ] = torch.tensor(
+                                    dataset[INPUTS_STR][DNA_STR],
+                                    dtype=torch.float,
+                                    requires_grad=False,
+                                )
+                            elif samples_key == METHYLATION_STR:
+                                self.data[
+                                    current_index : current_index
+                                    + file_sample_quantity,
+                                    :,
+                                ] = torch.tensor(
+                                    dataset[METHYLATION_STR],
+                                    dtype=torch.float,
+                                    requires_grad=False,
+                                )
+                        elif encoding == ONEHOT_ENCODING_STR:
+                            self.data[
+                                current_index : current_index
+                                + file_sample_quantity,
+                                :,
+                            ] = torch.tensor(
+                                _convert_token_dataset_to_onehot(
+                                    dataset, samples_key
+                                )
+                            )
+                        elif encoding == "bpe":
+                            if tokenizer is None:
+                                raise ValueError(
+                                    "Must provide a tokenizer to to convert to BPE"
+                                )
+
+                            self.data[
+                                current_index : current_index
+                                + file_sample_quantity,
+                            ] = _convert_token_dataset_to_bpe(
+                                dataset, tokenizer, samples_key
+                            )
+                    elif input_encoding == ONEHOT_ENCODING_STR:
+                        if encoding == ONEHOT_ENCODING_STR:
+                            if samples_key == INPUTS_STR:
+                                self.data[
+                                    current_index : current_index
+                                    + file_sample_quantity,
+                                    :,
+                                    :,
+                                ] = torch.tensor(
+                                    dataset[INPUTS_STR][DNA_STR],
+                                    dtype=torch.float,
+                                    requires_grad=False,
+                                )
+                            elif samples_key == METHYLATION_STR:
+                                self.data[
+                                    current_index : current_index
+                                    + file_sample_quantity,
+                                    :,
+                                    :,
+                                ] = torch.tensor(
+                                    np.array(
+                                        dataset[METHYLATION_SEQUENCES_KEY],
+                                        dtype=float,
+                                    ),
+                                    dtype=torch.float,
+                                    requires_grad=False,
+                                )
+                        elif encoding == TOKEN_ENCODING_STR:
+                            self.data[
+                                current_index : current_index
+                                + file_sample_quantity,
+                                :,
+                            ] = _convert_onehot_dataset_to_token(
+                                dataset, samples_key, allow_N=allow_N
+                            )
+                        elif encoding == "bpe":
+                            if tokenizer is None:
+                                raise ValueError(
+                                    "Must provide a tokenizer to to convert to BPE"
+                                )
+
+                            self.data[
+                                current_index : current_index
+                                + file_sample_quantity,
+                            ] = _convert_onehot_dataset_to_bpe(
+                                dataset, tokenizer, samples_key, allow_N=allow_N
+                            )
+
+                    if self.experiment_quantity > 1:
+                        for label_index, experiment_name in enumerate(
+                            dataset[METHYLATION_RATIOS_KEY].keys()
+                        ):
+                            self.labels[
+                                current_index : current_index
+                                + file_sample_quantity,
+                                label_index,
+                            ] = torch.tensor(
+                                dataset[METHYLATION_RATIOS_KEY][
+                                    experiment_name
+                                ],
+                                dtype=torch.float,
+                                requires_grad=False,
+                            )
+                    else:
                         self.labels[
-                            self.chromosome_indices[
-                                chromosome
-                            ].start : self.chromosome_indices[chromosome].end,
-                            label_index,
+                            current_index : current_index + file_sample_quantity
                         ] = torch.tensor(
-                            dataset[METHYLATION_RATIOS_KEY][experiment_name],
+                            dataset[METHYLATION_RATIOS_KEY],
                             dtype=torch.float,
                             requires_grad=False,
                         )
-                else:
-                    self.labels[
-                        self.chromosome_indices[
-                            chromosome
-                        ].start : self.chromosome_indices[chromosome].end
-                    ] = torch.tensor(
-                        dataset[METHYLATION_RATIOS_KEY],
-                        dtype=torch.float,
-                        requires_grad=False,
-                    )
+            else:
+                raise NotImplementedError(
+                    f"Reading from file format {file_format} is not supported."
+                )
 
-                self.labels[self.labels < threshold] = 0.0
-                self.labels[self.labels > 0.0] = 1.0
+            current_index += file_sample_quantity
 
-
-def nucleotide_character_to_numpy(
-    nucleotide: str, encoding: str = "basis"
-) -> NDArray[int]:
-    """
-    Convert a nucleotide designator to a one-hot array.
-
-    Args
-    ----
-    nucleotide: The ASCII nucleotide designator.
-
-    Returns
-    -------
-    The one-hot encoded array.
-    """
-    if nucleotide == "A":
-        return np.array([1, 0, 0, 0], dtype=int)
-    if nucleotide == "T":
-        return np.array([0, 1, 0, 0], dtype=int)
-    if nucleotide == "C":
-        return np.array([0, 0, 1, 0], dtype=int)
-    if nucleotide == "G":
-        return np.array([0, 0, 0, 1], dtype=int)
-    if nucleotide == "N":
-        if encoding == "amplitude":
-            equal_superposition: float = 1 / sqrt(2)
-            return np.array([equal_superposition] * 4, dtype=float)
-        else:
-            return np.array([0, 0, 0, 0], dtype=int)
-
-    raise ValueError(f"{nucleotide} is not a valid nucleotide designator")
-
-
-def nucleotide_string_to_numpy(sequence: str) -> NDArray[int] | None:
-    """
-    Convert a list of ASCII nucleotide designators to one-hot arrays.
-
-    Args
-    ----
-    sequence: A list of ASCII nucleotide designators.
-
-    Returns
-    -------
-    A matrix of one-hot encoded values.
-    """
-    return np.array(
-        [nucleotide_character_to_numpy(nucleotide) for nucleotide in sequence],
-        dtype=int,
-    )
-
-
-def nucleotide_integer_to_numpy(nucleotide: int) -> NDArray[int]:
-    """
-    Convert a nucleotide integer representation to a one-hot array.
-
-    Args
-    ----
-    nucleotide: The nucleotide integer.
-
-    Returns
-    -------
-    The one-hot encoded array.
-    """
-    if nucleotide == 0:
-        return np.array([1, 0, 0, 0], dtype=int)
-    if nucleotide == 1:
-        return np.array([0, 1, 0, 0], dtype=int)
-    if nucleotide == 2:
-        return np.array([0, 0, 1, 0], dtype=int)
-    if nucleotide == 3:
-        return np.array([0, 0, 0, 1], dtype=int)
-    if nucleotide == -1:
-        return np.array([0, 0, 0, 0], dtype=int)
-
-    raise ValueError(f"{nucleotide} is not a valid nucleotide designator")
-
-
-def nucleotide_array_to_numpy(sequence: Iterable[int]) -> NDArray[int] | None:
-    """
-    Convert a list of nucleotide integer representations to one-hot arrays.
-
-    Args
-    ----
-    sequence: A list of nucleotide integer representations.
-
-    Returns
-    -------
-    A matrix of one-hot encoded values.
-    """
-    return np.array(
-        [nucleotide_integer_to_numpy(nucleotide) for nucleotide in sequence],
-        dtype=int,
-    )
-
-
-def samples_to_numpy(
-    methylation_filepath: Path, threshold: float = 0.5
-) -> tuple[NDArray[int], NDArray[int]]:
-    """
-    Create input and truth samples for sequences of nucleotides and their methylations.
-
-    Args
-    ----
-    methylation_filepath: The filepath of a file containing methylation_profiles.
-    threshold: The threshold at which to consider a site methylated.
-
-    Returns
-    -------
-    A matrix of one-hot input sample encodings and the truth values.
-    """
-    logger.debug(
-        f"Loading methylation data from {methylation_filepath} with threshold "
-        f"{threshold}."
-    )
-    with open(methylation_filepath) as fd:
-        csv_reader = DictReader(fd)
-        read_data: list[tuple[NDArray[int], NDArray[int]]] = [
-            (
-                nucleotide_string_to_numpy(line["sequence"]),
-                np.array(
-                    0 if float(line["ratio_methylated"]) < threshold else 1,
-                    dtype=int,
-                ),
+        if 0.0 <= threshold <= 1.0:
+            self.labels[self.labels < threshold] = 0.0
+            self.labels[self.labels > 0.0] = 1.0
+        elif threshold != -1.0:
+            raise ValueError(
+                f"Threshold must be between 0.0 and 1.0, inclusive, if desired. If not, threshold must be -1.0, not {threshold}"
             )
-            for line in csv_reader
-        ]
-        return np.array(
-            [row[0] for row in read_data if row[0] is not None], dtype=int
-        ), np.array(
-            [row[1] for row in read_data if row[0] is not None], dtype=int
+
+
+def _check_file_types(filepaths: Sequence[Path]) -> str:
+    """
+    Determine the file type of the filepaths provided.
+
+    This function currently supports only 'h5' file formats.
+
+    Args
+    ----
+    filepaths: A sequence of filepaths.
+
+    Returns
+    -------
+    The file extension.
+
+    Raises
+    ------
+    ValueError if not all filepaths have the same extension.
+    NotImplemented error if the filepath has an unsupported extension.
+    """
+    if not filepaths:
+        raise ValueError("No filepaths provided")
+
+    if all(filepath.suffix == ".h5" for filepath in filepaths):
+        return H5_STR
+
+    first_filepath_suffix: str = filepaths[0].suffix
+    for filepath in filepaths:
+        if filepath.suffix != first_filepath_suffix:
+            raise ValueError(
+                f"Inhomogeneous file type found for filepath {filepath}"
+            )
+
+    raise NotImplementedError(
+        f"Unsupported file format or mixed file formats in files {filepaths}"
+    )
+
+
+def _find_h5_samples_key(dataset: h5py.Dataset) -> str:
+    """
+    Finds the key that corresponds to a certain H5 file structure.
+
+    Args
+    ----
+    filepath: The file to process.
+
+    Returns
+    -------
+    The key that represents a certain H5 file structure.
+
+    Raises
+    ------
+    RuntimeError if H5 file structure is not recognized.
+    """
+    if INPUTS_STR in dataset:
+        return INPUTS_STR
+
+    if METHYLATION_STR in dataset:
+        return METHYLATION_STR
+
+    raise RuntimeError("Sequence samples dataset not found")
+
+
+def _determine_h5_dimensions_and_type(filepath: Path, samples_key: str) -> int:
+    """
+    Determine the number of dimensions in the samples stored in the file provided.
+
+    Args
+    ----
+    filepath: The file to process.
+    samples_key: The key that represents a certain H5 file structure.
+
+    Returns
+    -------
+    The number of dimensions of the samples in the file.
+    """
+    with h5py.File(filepath) as dataset:
+        if samples_key == INPUTS_STR:
+            return (
+                len(dataset[INPUTS_STR][DNA_STR].shape),
+                dataset[INPUTS_STR][DNA_STR].dtype,
+            )
+
+        if samples_key == METHYLATION_STR:
+            return (
+                len(dataset[METHYLATION_STR].shape),
+                dataset[METHYLATION_STR].dtype,
+            )
+
+
+def _check_np_int(dtype: np.typing.DTypeLike) -> bool:
+    """
+    Check whether the dtype is any of the numpy integer dtypes.
+
+    Args
+    ----
+    dtype: The data type.
+
+    Returns
+    -------
+    True if a numpy integer dtype. False otherwise.
+    """
+    return (
+        dtype == np.int8
+        or dtype == np.int16
+        or dtype == np.int32
+        or dtype == np.int64
+    )
+
+
+def _determine_h5_sample_encoding(
+    filepaths: Sequence[Path], samples_key: str
+) -> str:
+    """
+    Determine the encoding of the h5 files being read.
+
+    Args
+    ----
+    filepaths: The files to process.
+    samples_key: The key that represents a certain H5 file structure.
+
+    Returns
+    -------
+    The encoding.
+
+    Raises
+    ------
+    RuntimeError if encoding method cannot be determined.
+    """
+    all_dimensions_types: list[tuple[int, np.typing.DTypeLike]] = [
+        _determine_h5_dimensions_and_type(filepath, samples_key)
+        for filepath in filepaths
+    ]
+    if all(
+        dimensions_types[0] == 2 for dimensions_types in all_dimensions_types
+    ) and all(
+        _check_np_int(dimensions_types[1])
+        for dimensions_types in all_dimensions_types
+    ):
+        return TOKEN_ENCODING_STR
+
+    if all(
+        dimensions_types[0] == 3 for dimensions_types in all_dimensions_types
+    ):
+        return ONEHOT_ENCODING_STR
+
+    raise RuntimeError(
+        f"Samples of type {all_dimensions_types[0][1]} and {all_dimensions_types[0][0]} dimensions are not supported."
+    )
+
+
+def _determine_sample_encoding(
+    filepaths: Sequence[Path], file_format: str, samples_key: str
+) -> str:
+    """
+    Determine the encoding of the files being read.
+
+    Args
+    ----
+    filepaths: The files to process.
+    file_format: The type of files provided.
+    samples_key: The key that represents a certain H5 file structure.
+
+    Returns
+    -------
+    The encoding.
+    """
+    if file_format == H5_STR:
+        return _determine_h5_sample_encoding(filepaths, samples_key)
+
+    raise NotImplementedError(
+        f"File parsing not implemented for file type {file_format}"
+    )
+
+
+def _determine_dataset_sample_quantity(
+    dataset: h5py.Dataset, samples_key: str
+) -> int:
+    """
+    Determine the quantity of samples in the dataset.
+
+    Args
+    ----
+    dataset: The dataset to process.
+    samples_key: The key that represents a certain H5 file structure.
+
+    Returns
+    -------
+    The quantity of samples in the dataset provided.
+
+    Raises
+    ------
+    RuntimeError if H5 file structure is not recognized.
+
+    """
+    if samples_key == INPUTS_STR:
+        return dataset[INPUTS_STR][DNA_STR].shape[0]
+
+    if samples_key == METHYLATION_STR:
+        return dataset[METHYLATION_STR].shape[0]
+
+    raise ValueError(f"Samples key {samples_key} not recognized.")
+
+
+def _determine_sample_quantity(
+    filepaths: Sequence[Path], file_format: str, samples_key: str
+):
+    """
+    Determine the total sample quantity in the provided filepaths.
+
+    Args
+    ----
+    filepaths: The files to count samples from.
+    file_format: The file type of the files.
+    samples_key: The key that represents a certain H5 file structure.
+
+    Returns
+    -------
+    The total sample quantity in all provided files.
+
+    Raises
+    ------
+    ValueError if parsing for the file_format provided is not supported.
+    """
+    sample_quantity: int = 0
+    if file_format == H5_STR:
+        for filepath in filepaths:
+            with h5py.File(filepath) as dataset:
+                file_sample_quantity: int = _determine_dataset_sample_quantity(
+                    dataset, samples_key
+                )
+                logger.debug(
+                    "Found %d samples in file %s",
+                    file_sample_quantity,
+                    str(filepath),
+                )
+                sample_quantity += file_sample_quantity
+
+        return sample_quantity
+
+    raise NotImplementedError(f"File format {file_format} not supported")
+
+
+def _convert_token_dataset_to_onehot(
+    dataset: h5py.Dataset, samples_key: str
+) -> torch.Tensor:
+    """
+    Convert a token-encoded H5 dataset to a one-hot encoded tensor.
+
+    Args
+    ----
+    dataset: The token-encoded H5 dataset to convert.
+    samples_key: The key that represents a certain H5 file structure.
+
+    Returns
+    -------
+    The one-hot encoded tensor.
+
+    Raises
+    ------
+    ValueError if samples_key does not correlate to a known H5 file structure.
+    """
+    if samples_key == INPUTS_STR:
+        return torch.tensor(
+            np.array(
+                [
+                    converters.nucleotide_array_to_numpy(sequence)
+                    for sequence in dataset[INPUTS_STR][DNA_STR]
+                ],
+                dtype=int,
+            ),
+            dtype=torch.int,
+            requires_grad=False,
         )
+
+    if samples_key == METHYLATION_STR:
+        return torch.tensor(
+            [
+                converters.nucleotide_array_to_numpy(sequence)
+                for sequence in dataset[METHYLATION_STR]
+            ],
+            dtype=torch.int,
+            requires_grad=False,
+        )
+
+    raise ValueError(
+        f"Conversion to one-hot encoding is not supported for H5 structure {samples_key}"
+    )
+
+
+def _convert_onehot_dataset_to_token(
+    dataset: h5py.Dataset, samples_key: str, *, allow_N: bool = False
+) -> torch.Tensor:
+    """
+    Convert a one-hot encoded H5 dataset to a token-encoded tensor.
+
+    Args
+    ----
+    dataset: The one-hot encoded H5 dataset to convert.
+    samples_key: The key that represents a certain H5 file structure.
+
+    Returns
+    -------
+    The token-encoded tensor.
+
+    Raises
+    ------
+    ValueError if samples_key does not correlate to a known H5 file structure.
+    """
+    if samples_key == INPUTS_STR:
+        return torch.tensor(
+            np.array(
+                [
+                    converters.one_hot_sequence_to_integers(
+                        sequence, allow_N=allow_N
+                    )
+                    for sequence in dataset[INPUTS_STR][DNA_STR]
+                ],
+                dtype=float,
+            ),
+            dtype=torch.float,
+            requires_grad=False,
+        )
+
+    if samples_key == METHYLATION_STR:
+        return torch.tensor(
+            np.array(
+                [
+                    converters.one_hot_sequence_to_integers(
+                        sequence, allow_N=allow_N
+                    )
+                    for sequence in dataset[METHYLATION_STR]
+                ],
+                dtype=float,
+            ),
+            dtype=torch.float,
+            requires_grad=False,
+        )
+
+    raise ValueError(
+        f"Conversion to token encoding is not supported for H5 structure {samples_key}"
+    )
+
+
+def _convert_token_dataset_to_bpe(
+    dataset: h5py.Dataset, tokenizer: TokenizersBackend, samples_key: str
+) -> torch.Tensor:
+    """
+    Convert a simple token H5 dataset to a Byte-Pair Encoding (BPE) tensor.
+
+    Args
+    ----
+    dataset: The simple token encoded H5 dataset to convert.
+    tokenizer: The tokenzier to convert nucleotide sequences to tokens.
+    samples_key: The key that represents a certain H5 file structure.
+
+    Returns
+    -------
+    The BPE tensor.
+
+    Raises
+    ------
+    ValueError if samples_key does not correlate to a known H5 file structure.
+    """
+    if samples_key == INPUTS_STR:
+        sample_quantity, sequence_length = dataset[INPUTS_STR][DNA_STR].shape
+        encodings: torch.Tensor = torch.empty(
+            (sample_quantity, sequence_length),
+            dtype=torch.int,
+            requires_grad=False,
+        )
+        for index, sequence in enumerate(dataset[INPUTS_STR][DNA_STR]):
+            encoding = torch.tensor(
+                tokenizer(converters.integer_array_to_nucleotide_str(sequence))[
+                    "input_ids"
+                ],
+                dtype=torch.int,
+                requires_grad=False,
+            )
+            half_padding: float = (sequence_length - len(encoding)) / 2
+            if half_padding.is_integer():
+                encodings[index] = torch.nn.functional.pad(
+                    encoding, (int(half_padding), int(half_padding))
+                )
+            else:
+                encodings[index] = torch.nn.functional.pad(
+                    encoding, (int(half_padding), int(half_padding) + 1)
+                )
+        return encodings
+
+    if samples_key == METHYLATION_STR:
+        sample_quantity, sequence_length = dataset[METHYLATION_STR].shape
+        encodings: torch.Tensor = torch.empty(
+            (sample_quantity, sequence_length),
+            dtype=torch.int,
+            requires_grad=False,
+        )
+        for index, sequence in enumerate(dataset[METHYLATION_STR]):
+            encoding = torch.tensor(
+                tokenizer(converters.integer_array_to_nucleotide_str(sequence))[
+                    "input_ids"
+                ],
+                dtype=torch.int,
+                requires_grad=False,
+            )
+            half_padding: float = (sequence_length - len(encoding)) / 2
+            if half_padding.is_integer():
+                encodings[index] = torch.nn.functional.pad(
+                    encoding, (int(half_padding), int(half_padding))
+                )
+            else:
+                encodings[index] = torch.nn.functional.pad(
+                    encoding, (int(half_padding), int(half_padding) + 1)
+                )
+        return encodings
+
+    raise ValueError(
+        f"BPE token conversion is not supported for H5 structure {samples_key}"
+    )
+
+
+def _convert_onehot_dataset_to_bpe(
+    dataset: h5py.Dataset,
+    tokenizer: TokenizersBackend,
+    samples_key: str,
+    *,
+    allow_N: bool = False,
+) -> torch.Tensor:
+    """
+    Convert a one-hot encoded H5 dataset to a Byte Pair Encoding (BPE) tensor.
+
+    Args
+    ----
+    dataset: The one-hot encoded H5 dataset to convert.
+    samples_key: The key that represents a certain H5 file structure.
+
+    Returns
+    -------
+    The BPE tensor.
+
+    Raises
+    ------
+    ValueError if samples_key does not correlate to a known H5 file structure.
+    """
+    if samples_key == INPUTS_STR:
+        sample_quantity, sequence_length, _ = dataset[INPUTS_STR][DNA_STR].shape
+        encodings: torch.Tensor = torch.empty(
+            (sample_quantity, sequence_length),
+            dtype=torch.int,
+            requires_grad=False,
+        )
+        for index, sequence in enumerate(dataset[INPUTS_STR][DNA_STR]):
+            encoding = torch.tensor(
+                tokenizer(
+                    converters.one_hot_sequence_to_nucleotide_str(
+                        sequence, allow_N=allow_N
+                    )
+                )["input_ids"],
+                dtype=torch.int,
+                requires_grad=False,
+            )
+            half_padding: float = (sequence_length - len(encoding)) / 2
+            if half_padding.is_integer():
+                encodings[index] = torch.nn.functional.pad(
+                    encoding, (int(half_padding), int(half_padding))
+                )
+            else:
+                encodings[index] = torch.nn.functional.pad(
+                    encoding, (int(half_padding), int(half_padding) + 1)
+                )
+        return encodings
+
+    if samples_key == METHYLATION_STR:
+        sample_quantity, sequence_length, _ = dataset[METHYLATION_STR].shape
+        encodings: torch.Tensor = torch.empty(
+            (sample_quantity, sequence_length),
+            dtype=torch.int,
+            requires_grad=False,
+        )
+        for index, sequence in enumerate(dataset[METHYLATION_STR]):
+            encoding = torch.tensor(
+                tokenizer(
+                    converters.one_hot_sequence_to_nucleotide_str(
+                        sequence, allow_N=allow_N
+                    )
+                )["input_ids"],
+                dtype=torch.int,
+                requires_grad=False,
+            )
+            half_padding: float = (sequence_length - len(encoding)) / 2
+            if half_padding.is_integer():
+                encodings[index] = torch.nn.functional.pad(
+                    encoding, (int(half_padding), int(half_padding))
+                )
+            else:
+                encodings[index] = torch.nn.functional.pad(
+                    encoding, (int(half_padding), int(half_padding) + 1)
+                )
+        return encodings
+
+    raise ValueError(
+        f"BPE token conversion is not supported for H5 structure {samples_key}"
+    )
 
 
 def _increment_or_create_entry(dictionary: dict[Any, ...], key: Any) -> None:
@@ -285,7 +874,9 @@ def _increment_or_create_entry(dictionary: dict[Any, ...], key: Any) -> None:
 
 def _validate_sequence(sequence: str) -> bool:
     middle_index: int = int(len(sequence) / 2) - 1
-    return not (sequence[middle_index:middle_index + 2] != "CG" or "N" in sequence)
+    return not (
+        sequence[middle_index : middle_index + 2] != "CG" or "N" in sequence
+    )
 
 
 def _retrieve_chromosome_sequences(
@@ -297,9 +888,8 @@ def _retrieve_chromosome_sequences(
     sequence_length: int,
     experiment_names: list[str],
 ) -> tuple[NDArray[bool], NDArray[float]]:
-    unique_nucleotide_quantity: int = 4
     sequences = np.ndarray(
-        (0, sequence_length, unique_nucleotide_quantity), dtype=int
+        (0, sequence_length, converters.UNIQUE_NUCLEOTIDE_QUANTITY), dtype=int
     )
     experiment_mapping: dict[str, int] = {
         experiment_name: index
@@ -320,8 +910,8 @@ def _retrieve_chromosome_sequences(
         else:
             sequences = np.append(
                 sequences,
-                nucleotide_string_to_numpy(sequence).reshape(
-                    1, sequence_length, unique_nucleotide_quantity
+                converters.nucleotide_string_to_numpy(sequence).reshape(
+                    1, sequence_length, converters.UNIQUE_NUCLEOTIDE_QUANTITY
                 ),
                 axis=0,
             )
