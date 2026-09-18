@@ -12,7 +12,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from math import ceil, log2
+from math import ceil, log2, sqrt
 
 import pennylane as qp
 import torch.nn
@@ -58,6 +58,11 @@ class QNN(nn.Module):
             self.embedding = None
             data_qubit_quantity = AMPLITUDE_QUBIT_QUANTITY
 
+        wire_quantity: int = (
+            calculate_address_register_size(sequence_length)
+            + data_qubit_quantity
+        )
+
         self.qnn = _torch_qnn_layer(
             sequence_length,
             quantum_layer_quantity,
@@ -78,7 +83,7 @@ class QNN(nn.Module):
                 )
         elif fcl_quantity == 1:
             self.linear = _define_fcl(
-                data_qubit_quantity, output_quantity, measurement=measurement
+                wire_quantity, output_quantity, measurement=measurement
             )
         else:
             raise NotImplementedError(
@@ -184,38 +189,48 @@ def calculate_address_register_size(encode_quantity: int) -> int:
     return ceil(log2(encode_quantity))
 
 
-def _encode_nucleotide(
-    nucleotide: Tensor,
-    index: int,
+def _sequence_amplitudes(
+    nucleotides: Tensor,
+    sequence_length: int,
     address_register_size: int,
     *,
     embedding_qubit_quantity: int = AMPLITUDE_QUBIT_QUANTITY,
-) -> None:
+) -> Tensor:
     """
-    Amplitude-encode nucleotide value into a quantum circuit at the appropriate index.
+    Flatten a nucleotide sequence into the amplitude vector it addresses.
 
     Args
     ----
-    nucleotide: An enumerated value corresponding to a type of nucleotide.
-    index: The location of the nucleotide in the sequence.
+    nucleotides: A sequence of per-position amplitude vectors, batched or not.
+    sequence_length: The number of positions in the sequence.
     address_register_size: The size of the quantum address register.
+    embedding_qubit_quantity: The size of the quantum data register.
+
+    Returns
+    -------
+    The amplitude vector of the full circuit register.
     """
-    controls: list[int] = [int(value) for value in bin(index).split("b")[1]]
-    if len(controls) != address_register_size:
-        controls = [0] * (address_register_size - len(controls)) + controls
-    qp.ctrl(
-        qp.AmplitudeEmbedding,
-        list(range(address_register_size)),
-        control_values=controls,
-    )(
-        nucleotide,
-        list(
-            range(
-                address_register_size,
-                address_register_size + embedding_qubit_quantity,
-            )
-        ),
+    address_range: int = 2**address_register_size
+    block_size: int = 2**embedding_qubit_quantity
+    is_batched: bool = len(nucleotides.shape) == 3
+    if not is_batched:
+        nucleotides = nucleotides.unsqueeze(0)
+
+    # Addresses past the end of the sequence are never loaded, so their data
+    # register stays in the all-zero basis state.
+    padding = torch.zeros(
+        nucleotides.shape[0],
+        address_range - sequence_length,
+        block_size,
+        dtype=nucleotides.dtype,
+        device=nucleotides.device,
     )
+    padding[..., 0] = 1.0
+    amplitudes: Tensor = torch.cat(
+        [nucleotides[:, :sequence_length, :], padding], dim=1
+    ).reshape(-1, address_range * block_size) / sqrt(address_range)
+
+    return amplitudes if is_batched else amplitudes[0]
 
 
 def _encode_all_nucleotides(
@@ -226,29 +241,22 @@ def _encode_all_nucleotides(
     embedding_qubit_quantity: int = AMPLITUDE_QUBIT_QUANTITY,
 ) -> None:
     """
-    One-hot encode nucleotide values into a quantum circuit at appropriate addresses.
+    Encode nucleotide values into a quantum circuit at appropriate addresses.
+
 
     Args
     ----
     nucleotides: A sequence of enum-mapped nucleotide values.
     """
-    for index in range(address_register_size):
-        qp.Hadamard(wires=index)
-    for index in range(sequence_length):
-        if len(nucleotides.shape) == 2:
-            _encode_nucleotide(
-                nucleotides[index],
-                index,
-                address_register_size,
-                embedding_qubit_quantity=embedding_qubit_quantity,
-            )
-        else:
-            _encode_nucleotide(
-                nucleotides[:, index, :],
-                index,
-                address_register_size,
-                embedding_qubit_quantity=embedding_qubit_quantity,
-            )
+    qp.AmplitudeEmbedding(
+        _sequence_amplitudes(
+            nucleotides,
+            sequence_length,
+            address_register_size,
+            embedding_qubit_quantity=embedding_qubit_quantity,
+        ),
+        wires=list(range(address_register_size + embedding_qubit_quantity)),
+    )
 
 
 def _device_setup(
@@ -270,22 +278,11 @@ def _apply_entangling_layer(
     wire_quantity: int,
     *,
     entangling: str = "basic",
-    embedding_qubit_quantity: int = AMPLITUDE_QUBIT_QUANTITY,
 ) -> None:
     if entangling == "basic":
-        qp.BasicEntanglerLayers(
-            weights,
-            wires=list(
-                range(wire_quantity - embedding_qubit_quantity, wire_quantity)
-            ),
-        )
+        qp.BasicEntanglerLayers(weights, wires=list(range(wire_quantity)))
     elif entangling == "strong":
-        qp.StronglyEntanglingLayers(
-            weights,
-            wires=list(
-                range(wire_quantity - embedding_qubit_quantity, wire_quantity)
-            ),
-        )
+        qp.StronglyEntanglingLayers(weights, wires=list(range(wire_quantity)))
     else:
         raise ValueError(f"Unknown entangling layer type {entangling}")
 
@@ -294,21 +291,18 @@ def _measure(
     wire_quantity: int,
     *,
     measurement: str = "probability",
-    embedding_qubit_quantity: int = AMPLITUDE_QUBIT_QUANTITY,
 ) -> qp.measurements.ProbabilityMP | list[qp.measurements.ExpectationMP]:
+    # Reads out the address register alongside the data register. Measuring the
+    # data register alone traces the address register out, which averages the
+    # readout over sequence positions and leaves the model blind to nucleotide
+    # order.
     if measurement == "probability":
-        return qp.probs(
-            wires=list(
-                range(wire_quantity - embedding_qubit_quantity, wire_quantity)
-            )
-        )
+        return qp.probs(wires=list(range(wire_quantity)))
 
     if measurement == "expectation":
         return [
             qp.expval(qp.PauliZ(qubit_index))
-            for qubit_index in range(
-                wire_quantity - embedding_qubit_quantity, wire_quantity
-            )
+            for qubit_index in range(wire_quantity)
         ]
 
     raise ValueError(f"Unknown measurement type {measurement}")
@@ -392,19 +386,14 @@ def _torch_qnn_layer(
             weights,
             wire_quantity,
             entangling=entangling,
-            embedding_qubit_quantity=embedding_qubit_quantity,
         )
 
-        return _measure(
-            wire_quantity,
-            measurement=measurement,
-            embedding_qubit_quantity=embedding_qubit_quantity,
-        )
+        return _measure(wire_quantity, measurement=measurement)
 
     return _convert_qnode_to_torch_layer(
         _qnode,
         quantum_layer_quantity,
-        embedding_qubit_quantity,
+        wire_quantity,
         entangling=entangling,
     )
 

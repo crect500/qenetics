@@ -31,61 +31,6 @@ def test_device_setup(device_name: str, distribute: bool) -> None:
         assert isinstance(device, qp.devices.LightningGPU)
 
 
-@pytest.mark.parametrize(
-    ("nucleotide_characters", "index"),
-    [
-        (["A"], 0),
-        (["T"], 0),
-        (["C"], 0),
-        (["G"], 0),
-        (["A"], 1),
-        (["T"], 1),
-        (["C"], 2),
-        (["A"], 2),
-        (["A"], 6),
-        (["C"], 6),
-        (["A", "T"], 2),
-        (["C", "G"], 2),
-    ],
-)
-def test_encode_nucleotide(
-    nucleotide_characters: list[str], index: int
-) -> None:
-    nucleotide = np.array(
-        [
-            converters.nucleotide_character_to_numpy(nucleotide_character)
-            for nucleotide_character in nucleotide_characters
-        ]
-    )
-    address_register_size = qcpg_models.calculate_address_register_size(
-        index + 1
-    )
-    circuit_width: int = (
-        address_register_size + qcpg_models.AMPLITUDE_QUBIT_QUANTITY
-    )
-    address_range: int = 2**address_register_size
-    device = qp.device("default.qubit", wires=circuit_width)
-
-    @qp.qnode(device)
-    def run_circuit() -> qp.measurements.ProbabilityMP:
-        for qubit_index in range(address_register_size):
-            qp.Hadamard(qubit_index)
-        qcpg_models._encode_nucleotide(nucleotide, index, address_register_size)
-        return qp.probs(wires=list(range(circuit_width)))
-
-    expanded_circuit = qp.transforms.broadcast_expand(run_circuit)
-    results: qp.measurements.ProbabilityMP = expanded_circuit()
-    for result_index, nucleotide_character in enumerate(nucleotide_characters):
-        target_index: int = (
-            index * 4
-            + dna.convert_nucleotide_to_enum(nucleotide_character).value
-        )
-        assert results[result_index].sum() == pytest.approx(1.0)
-        assert results[result_index][target_index] == pytest.approx(
-            1 / address_range
-        )
-
-
 @pytest.mark.parametrize("sequence", ["A", "C", "AA", "AC", "ACTG"])
 def test_encode_all_nucleotides(sequence: list[str]) -> None:
     sequence_tensors = tensor(converters.nucleotide_string_to_numpy(sequence))
@@ -131,17 +76,15 @@ def test_basic_entangling_torch(
             dtype=float,
         )
     )
+    wire_quantity: int = (
+        qcpg_models.calculate_address_register_size(sequence_length)
+        + qcpg_models.AMPLITUDE_QUBIT_QUANTITY
+    )
     quantum_layer: qp.qnn.torch.TorchLayer = qcpg_models._torch_qnn_layer(
         sequence_length, layer_quantity, entangling="basic"
     )
-    assert quantum_layer.weights.shape == (
-        layer_quantity,
-        qcpg_models.AMPLITUDE_QUBIT_QUANTITY,
-    )
-    assert (
-        len(quantum_layer(test_input[0]))
-        == 2**qcpg_models.AMPLITUDE_QUBIT_QUANTITY
-    )
+    assert quantum_layer.weights.shape == (layer_quantity, wire_quantity)
+    assert len(quantum_layer(test_input[0])) == 2**wire_quantity
 
     quantum_layer: qp.qnn.torch.TorchLayer = qcpg_models._torch_qnn_layer(
         sequence_length,
@@ -149,10 +92,7 @@ def test_basic_entangling_torch(
         entangling="basic",
         measurement="expectation",
     )
-    assert (
-        len(quantum_layer(test_input[0]))
-        == qcpg_models.AMPLITUDE_QUBIT_QUANTITY
-    )
+    assert len(quantum_layer(test_input[0])) == wire_quantity
 
 
 @pytest.mark.parametrize(
@@ -169,18 +109,19 @@ def test_strongly_entangled_torch(
             dtype=float,
         )
     )
+    wire_quantity: int = (
+        qcpg_models.calculate_address_register_size(sequence_length)
+        + qcpg_models.AMPLITUDE_QUBIT_QUANTITY
+    )
     quantum_layer: qp.qnn.torch.TorchLayer = qcpg_models._torch_qnn_layer(
         sequence_length, layer_quantity, entangling="strong"
     )
     assert quantum_layer.weights.shape == (
         layer_quantity,
-        qcpg_models.AMPLITUDE_QUBIT_QUANTITY,
+        wire_quantity,
         qcpg_models.UNIQUE_ROTATIONS_QUANTITY,
     )
-    assert (
-        len(quantum_layer(test_input[0]))
-        == 2**qcpg_models.AMPLITUDE_QUBIT_QUANTITY
-    )
+    assert len(quantum_layer(test_input[0])) == 2**wire_quantity
 
     quantum_layer: qp.qnn.torch.TorchLayer = qcpg_models._torch_qnn_layer(
         sequence_length,
@@ -188,10 +129,7 @@ def test_strongly_entangled_torch(
         entangling="basic",
         measurement="expectation",
     )
-    assert (
-        len(quantum_layer(test_input[0]))
-        == qcpg_models.AMPLITUDE_QUBIT_QUANTITY
-    )
+    assert len(quantum_layer(test_input[0])) == wire_quantity
 
 
 @pytest.mark.parametrize(
