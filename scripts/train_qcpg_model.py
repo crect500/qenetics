@@ -2,6 +2,8 @@ import logging
 from argparse import ArgumentParser, Namespace
 from pathlib import Path
 
+from transformers import AutoTokenizer
+
 from qenetics.qcpg import qcpg
 
 UNIQUE_NUCLEOTIDE_QUANTITY: int = 4
@@ -65,8 +67,23 @@ def _parse_script_args() -> Namespace:
         dest="encoding",
         required=False,
         type=str,
-        default="amplitude",
-        help="'basis' for basis encoding, 'amplitude' for amplitude encoding.",
+        default="onehot",
+        help="'onehot', 'token', or 'bpe'",
+    )
+    parser.add_argument(
+        "--embedding-qubits",
+        dest="embedding_qubit_quantity",
+        required=False,
+        type=int,
+        help="The number of qubits to use for the embedding layer",
+    )
+    parser.add_argument(
+        "--tokenizer",
+        dest="tokenizer",
+        required=False,
+        type=str,
+        default="PoetschLab/GROVER",
+        help="The huggingface pretrained tokenizer name to use",
     )
     parser.add_argument(
         "--measurement",
@@ -196,6 +213,15 @@ if __name__ == "__main__":
         device_name = "lightning.qubit"
         distribute = False
 
+    if args.tokenizer is not None:
+        tokenizer: AutoTokenizer | None = AutoTokenizer.from_pretrained(
+            args.tokenizer
+        )
+        vocabulary_size: int | None = tokenizer.vocab_size
+    else:
+        tokenizer = None
+        vocabulary_size = None
+
     qcpg.train_qnn_circuit(
         qcpg.TrainingParameters(
             data_directory=args.data_directory,
@@ -204,6 +230,9 @@ if __name__ == "__main__":
             validation_chromosomes=args.validation_chromosomes,
             entangler=args.entangler,
             encoding=args.encoding,
+            embedding_qubit_quantity=args.embedding_qubit_quantity,
+            tokenizer=tokenizer,
+            vocabulary_size=vocabulary_size,
             measurement=args.measurement,
             diff_method=args.diff_method,
             layer_quantity=args.layer_quantity,

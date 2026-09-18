@@ -329,6 +329,11 @@ def _prepare_training(
             "Loaded %d samples from validation files", len(validation_dataset)
         )
     )
+    if training_parameters.encoding in ["token", "bpe"]:
+        encoding: str = "token"
+    else:
+        encoding = training_parameters.encoding
+
     logger.debug("Validation set shape %s", str(validation_dataset.data.shape))
     sequence_length: int = training_dataset.data.shape[1]
     output_shape: int = training_dataset.experiment_quantity
@@ -337,7 +342,7 @@ def _prepare_training(
         training_parameters.layer_quantity,
         output_shape,
         entangling=training_parameters.entangler,
-        encoding=training_parameters.encoding,
+        encoding=encoding,
         embedding_qubit_quantity=training_parameters.embedding_qubit_quantity,
         vocabulary_size=training_parameters.vocabulary_size,
         fcl_quantity=training_parameters.fcl_quantity,
