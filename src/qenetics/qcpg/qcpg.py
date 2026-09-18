@@ -18,6 +18,7 @@ from torch.distributed import destroy_process_group, init_process_group
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
+from transformers import AutoTokenizer
 
 from qenetics.qcpg import qcpg_models
 from qenetics.tools import data, dna, metrics
@@ -35,7 +36,7 @@ class TrainingParameters:
     validation_chromosomes: list[str] = field(
         default_factory=lambda: ["2", "4", "6", "8", "10", "12"]
     )
-    encoding: str = "amplitude"
+    encoding: str = data.ONEHOT_ENCODING_STR
     entangler: str = "basic"
     measurement: str = "probability"
     diff_method: str = "adjoint"
@@ -47,6 +48,11 @@ class TrainingParameters:
     batch_size: int = 128
     report_every: int = 1
     device_name: str = "default.qubit"
+    tokenizer: AutoTokenizer | None = None
+    embedding_qubit_quantity: int | None = None
+    vocabulary_size: int | None = None
+    fcl_quantity: int | None = 1
+    shots: int = -1
     distributed: bool = False
     gpu_quantity: int = 0
     model_filepath: Path | None = None
@@ -300,19 +306,23 @@ def _prepare_training(
 ) -> tuple[
     DataLoader, DataLoader, qcpg_models.QNN | DistributedDataParallel, optim.SGD
 ]:
-    training_dataset = data.H5CpGDataset(
+    training_dataset = data.QuantumTorchDataset(
         [
             training_parameters.data_directory / f"chr{chromosome}.h5"
             for chromosome in training_parameters.training_chromosomes
-        ]
+        ],
+        encoding=training_parameters.encoding,
+        tokenizer=training_parameters.tokenizer,
     )
     logger.info("Loaded %d samples from training files", len(training_dataset))
     logger.debug("Training set shape %s", str(training_dataset.data.shape))
-    validation_dataset = data.H5CpGDataset(
+    validation_dataset = data.QuantumTorchDataset(
         [
             training_parameters.data_directory / f"chr{chromosome}.h5"
             for chromosome in training_parameters.validation_chromosomes
-        ]
+        ],
+        encoding=training_parameters.encoding,
+        tokenizer=training_parameters.tokenizer,
     )
     logger.info(
         logger.info(
@@ -326,8 +336,11 @@ def _prepare_training(
         sequence_length,
         training_parameters.layer_quantity,
         output_shape,
-        entangler=training_parameters.entangler,
+        entangling=training_parameters.entangler,
         encoding=training_parameters.encoding,
+        embedding_qubit_quantity=training_parameters.embedding_qubit_quantity,
+        vocabulary_size=training_parameters.vocabulary_size,
+        fcl_quantity=training_parameters.fcl_quantity,
         measurement=training_parameters.measurement,
         device_name=training_parameters.device_name,
         distribute=training_parameters.distributed,
@@ -397,14 +410,14 @@ def _train_one_epoch(
         optimizer.zero_grad()
         outputs: Tensor = model(inputs)
         if len(labels.shape) > 1:
-            non_nan_indices = _non_nan_indices(labels)
-            loss: Tensor = nn.functional.binary_cross_entropy(
-                outputs[non_nan_indices], labels[non_nan_indices]
-            )
-        else:
-            loss: Tensor = nn.functional.binary_cross_entropy(
+            loss: Tensor = nn.functional.binary_cross_entropy(outputs, labels)
+        elif len(outputs.shape) > 1:
+            loss = nn.functional.binary_cross_entropy(
                 outputs.squeeze(1), labels
             )
+        else:
+            loss = nn.functional.binary_cross_entropy(outputs, labels)
+
         if training_parameters.l1_regularizer != 0.0:
             loss += training_parameters.l1_regularizer * sum(
                 parameter_vector.abs().sum()
@@ -470,10 +483,12 @@ def _evaluate_validation_set(
                 loss: Tensor = nn.functional.binary_cross_entropy(
                     outputs, labels
                 )
-            else:
-                loss: Tensor = nn.functional.binary_cross_entropy(
+            elif len(outputs.shape) > 1:
+                loss = nn.functional.binary_cross_entropy(
                     outputs.squeeze(1), labels
                 )
+            else:
+                loss = nn.functional.binary_cross_entropy(outputs, labels)
 
             if training_parameters.l1_regularizer != 0.0:
                 loss += training_parameters.l1_regularizer * sum(
@@ -577,7 +592,7 @@ def _multi_gpu_train_qcpq_circuit(
         raise RuntimeError("This function requires more than 1 GPU to run.")
 
 
-def train_qnn_circuit(training_parameters: TrainingParameters) -> None:
+def _set_up_logging(training_parameters: TrainingParameters) -> None:
     logging.basicConfig(
         filename=training_parameters.log_directory / "qcpg_train.log",
         level=training_parameters.log_level,
@@ -592,6 +607,10 @@ def train_qnn_circuit(training_parameters: TrainingParameters) -> None:
     logger.info("\tEpochs: %d", training_parameters.epochs)
     logger.info("\tL1 regularization: %f", training_parameters.l1_regularizer)
     logger.info("\tL2 regularization: %f", training_parameters.l2_regularizer)
+
+
+def train_qnn_circuit(training_parameters: TrainingParameters) -> None:
+    _set_up_logging(training_parameters)
 
     if training_parameters.gpu_quantity in [0, 1]:
         if training_parameters.gpu_quantity == 1:
@@ -614,3 +633,7 @@ def train_qnn_circuit(training_parameters: TrainingParameters) -> None:
         _multi_gpu_train_qcpq_circuit(training_parameters)
     else:
         raise ValueError("Negative GPU quantity specified.")
+
+
+def train_rqnn_circuit(training_parameters: TrainingParameters) -> None:
+    _set_up_logging(training_parameters)

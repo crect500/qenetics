@@ -23,7 +23,7 @@ INPUTS_STR: str = "inputs"
 DNA_STR: str = "dna"
 METHYLATION_STR: str = "methylation_sequences"
 TOKEN_ENCODING_STR: str = "token"
-ONEHOT_ENCODING_STR: str = "one-hot"
+ONEHOT_ENCODING_STR: str = "onehot"
 BPE_ENCODING_STR: str = "bpe"
 H5_STR: str = "h5"
 
@@ -49,7 +49,7 @@ class QuantumTorchDataset(Dataset):
         ----
         filepaths: The files to load. Currently only 'h5' file formats are supported.
         threshold: The threshold for the binary predictions.
-        encoding: The encoding method. Currently supported encodings are 'token', 'one-hot', and 'BPE.
+        encoding: The encoding method. Currently supported encodings are 'token', 'onehot', and 'BPE.
         tokenizer: The BPE tokenizer.
         allow_N: Whether to allow N in the original dataset encoding.
         """
@@ -147,7 +147,7 @@ class QuantumTorchDataset(Dataset):
         ----
         filepaths: The files to load into tensors.
         file_format: The type of the files.
-        encoding: The encoding method. Currently supported encodings are 'token', 'one-hot', and 'BPE'.
+        encoding: The encoding method. Currently supported encodings are 'token', 'onehot', and 'BPE'.
 
         Raises
         ------
@@ -215,7 +215,7 @@ class QuantumTorchDataset(Dataset):
         file_format: The type of the files.
         input_encoding: The encoding of the files to be loaded into tensors.
         samples_key: The key that represents a certain H5 file structure.
-        encoding: The encoding method. Currently supported encodings are 'token', 'one-hot', and 'BPE'.
+        encoding: The encoding method. Currently supported encodings are 'token', 'onehot', and 'BPE'.
         threshold: The threshold for the binary predictions.
         tokenizer: The tokenizer used for BPE encodings.
         allow_N: Whether to allow zero in the original dataset encoding.

@@ -3,12 +3,14 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import mock
 
+import numpy as np
 import pytest
 import torch
 from torch import optim, tensor
+from transformers import AutoTokenizer
 
 from qenetics.qcpg import qcpg, qcpg_models
-from qenetics.tools import data
+from qenetics.tools import converters, data
 
 UNIQUE_NUCLEOTIDE_QUANTITY: int = 4
 
@@ -17,21 +19,34 @@ def test_get_free_port() -> None:
     qcpg._get_free_port()
 
 
+@pytest.mark.parametrize(
+    ("encoding"), [data.ONEHOT_ENCODING_STR, data.TOKEN_ENCODING_STR]
+)
 def test_prepare_training(
+    encoding: str,
     test_single_amplitude_dataset_directory: Path,
+    grover_tokenizer: AutoTokenizer,
 ) -> None:
+    if encoding == data.TOKEN_ENCODING_STR:
+        embedding_qubit_quantity: int | None = 1
+        vocabulary_size: int | None = 4
+    else:
+        embedding_qubit_quantity = None
+        vocabulary_size = None
+
     with TemporaryDirectory() as temp_dir:
         training_parameters = qcpg.TrainingParameters(
             data_directory=test_single_amplitude_dataset_directory,
-            output_filepath=Path(temp_dir) / "output.dat",
+            output_directory=Path(temp_dir),
             training_chromosomes=["1", "2"],
             validation_chromosomes=["1", "2"],
+            encoding=encoding,
+            embedding_qubit_quantity=embedding_qubit_quantity,
+            vocabulary_size=vocabulary_size,
             batch_size=2,
             epochs=2,
         )
-    _training_loader, _validation_loader, _model, _optimizer = (
-        qcpg._prepare_training(training_parameters)
-    )
+    _, _, _, _ = qcpg._prepare_training(training_parameters)
 
 
 @pytest.mark.parametrize(
@@ -61,29 +76,41 @@ def test_train_one_epoch(
     sequences: list[str],
     layer_quantity: int,
     output_quantity: int,
-    test_h5_loader: data.H5CpGDataset,
+    test_h5_loader: data.QuantumTorchDataset,
 ) -> None:
     model = qcpg_models.QNN(len(sequences[0]), layer_quantity, output_quantity)
     training_parameters = qcpg.TrainingParameters(
         data_directory=Path("."),
-        output_filepath=Path("."),
+        output_directory=Path("."),
     )
     with (
-        mock.patch("qenetics.tools.data.H5CpGDataset.__getitem__") as mock_get,
+        mock.patch(
+            "qenetics.tools.data.QuantumTorchDataset.__getitem__"
+        ) as mock_get,
     ):
+        if output_quantity > 1:
+            labels: torch.Tensor = tensor(
+                [[0.0] * output_quantity for _ in sequences],
+                dtype=torch.float,
+            )
+        else:
+            labels = tensor(
+                [0.0 * output_quantity for _ in sequences],
+                dtype=torch.float,
+            )
         mock_get.side_effect = [
             (
                 tensor(
-                    [
-                        data.nucleotide_string_to_numpy(sequence)
-                        for sequence in sequences
-                    ],
+                    np.array(
+                        [
+                            converters.nucleotide_string_to_numpy(sequence)
+                            for sequence in sequences
+                        ],
+                        dtype=float,
+                    ),
                     dtype=torch.float,
                 ),
-                tensor(
-                    [[0.0] * output_quantity for _ in sequences],
-                    dtype=torch.float,
-                ),
+                labels,
             )
         ]
         _ = qcpg._train_one_epoch(
@@ -95,7 +122,9 @@ def test_train_one_epoch(
         )
 
 
-def test_train_one_epoch_with_nans(test_h5_loader: data.H5CpGDataset) -> None:
+def test_train_one_epoch_with_nans(
+    test_h5_loader: data.QuantumTorchDataset,
+) -> None:
     sequence_length: int = 2
     layer_quantity: int = 1
     output_quantity: int = 2
@@ -107,7 +136,9 @@ def test_train_one_epoch_with_nans(test_h5_loader: data.H5CpGDataset) -> None:
         l2_regularizer=0.1,
     )
     with (
-        mock.patch("qenetics.tools.data.H5CpGDataset.__getitem__") as mock_get,
+        mock.patch(
+            "qenetics.tools.data.QuantumTorchDataset.__getitem__"
+        ) as mock_get,
     ):
         mock_get.side_effect = [
             (
@@ -125,7 +156,7 @@ def test_train_one_epoch_with_nans(test_h5_loader: data.H5CpGDataset) -> None:
 
 
 def test_evaluate_validation_set(
-    test_h5_loader: data.H5CpGDataset,
+    test_h5_loader: data.QuantumTorchDataset,
 ) -> None:
     sequence_length: int = 2
     layer_quantity: int = 1
@@ -133,10 +164,12 @@ def test_evaluate_validation_set(
     model = qcpg_models.QNN(sequence_length, layer_quantity, output_quantity)
     training_parameters = qcpg.TrainingParameters(
         data_directory=Path("."),
-        output_filepath=Path("."),
+        output_directory=Path("."),
     )
     with (
-        mock.patch("qenetics.tools.data.H5CpGDataset.__getitem__") as mock_get,
+        mock.patch(
+            "qenetics.tools.data.QuantumTorchDataset.__getitem__"
+        ) as mock_get,
     ):
         mock_get.side_effect = [
             (
@@ -159,8 +192,8 @@ def test_train_qnn_circuit(
     with TemporaryDirectory() as temp_dir:
         training_parameters = qcpg.TrainingParameters(
             data_directory=test_single_amplitude_dataset_directory,
-            output_filepath=Path(temp_dir) / "output.dat",
-            log_directory=Path(temp_dir) / "log.log",
+            output_directory=Path(temp_dir),
+            log_directory=Path(temp_dir),
             training_chromosomes=["1", "2"],
             validation_chromosomes=["1", "2"],
             batch_size=2,

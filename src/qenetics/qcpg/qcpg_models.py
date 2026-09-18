@@ -1,14 +1,23 @@
+# Must change the following in pennylane/qnn/torch.py
+# - # reshape to the correct number of dimensions
+# - if has_batch_dim:
+# -     results = torch.reshape(results, (batch_dims, *results.shape[1:]))
+#
+# def _combine_dimensions(_res):
+#   if len(x.shape) > 1:
+# -     _res = [torch.reshape(r, (x.shape[0], -1)) for r in _res]
+# - return torch.hstack(_res).type(x.dtype)
+# + return torch.stack(_res).type(x.dtype)
+
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from math import ceil, log2
 
-import pennylane as qml
+import pennylane as qp
 import torch.nn
 from torch import Tensor, nn
 from torch.nn import functional
-
-from qenetics.tools import data
 
 AMPLITUDE_QUBIT_QUANTITY: int = 2
 UNIQUE_ROTATIONS_QUANTITY: int = 3
@@ -16,43 +25,118 @@ SEQUENCE_LENGTH: int = -1
 
 
 class QNN(nn.Module):
+    """
+    Amplitude-encoded QNN with an FCL.
+
+    """
+
     def __init__(
         self: QNN,
         sequence_length: int,
         quantum_layer_quantity: int,
         output_quantity: int,
-        entangler: str = "strong",
-        encoding: str = "amplitude",
-        measurement: str = "probability",
+        *,
+        encoding: str = "onehot",
+        embedding_qubit_quantity: int | None = None,
+        vocabulary_size: int | None = None,
+        fcl_quantity: int | None = 1,
+        entangling: str = "basic",
+        measurement: str = "expectation",
         device_name: str = "default.qubit",
         diff_method: str = "adjoint",
-        distribute: bool = True,
+        distribute: bool = False,
     ) -> None:
         super().__init__()
         global SEQUENCE_LENGTH
         SEQUENCE_LENGTH = sequence_length
+        if encoding == "token":
+            self.embedding = nn.Embedding(
+                vocabulary_size, 2**embedding_qubit_quantity
+            )
+            data_qubit_quantity: int = embedding_qubit_quantity
+        elif encoding == "onehot":
+            self.embedding = None
+            data_qubit_quantity = AMPLITUDE_QUBIT_QUANTITY
 
-        self.qnn = define_torch_qnode(
+        self.qnn = _torch_qnn_layer(
             sequence_length,
             quantum_layer_quantity,
+            encoding=encoding,
+            embedding_qubit_quantity=embedding_qubit_quantity,
             device_name=device_name,
             distribute=distribute,
-            encoding=encoding,
-            entangling=entangler,
+            entangling=entangling,
             measurement=measurement,
             diff_method=diff_method,
         )
 
-        wire_quantity: int = (
-            calculate_address_register_size(sequence_length)
-            + AMPLITUDE_QUBIT_QUANTITY
+        if fcl_quantity is None:
+            self.linear = None
+            if output_quantity != 1:
+                raise NotImplementedError(
+                    "Purely quantum network with more than one output is not supported"
+                )
+        elif fcl_quantity == 1:
+            self.linear = _define_fcl(
+                data_qubit_quantity, output_quantity, measurement=measurement
+            )
+        else:
+            raise NotImplementedError(
+                f"fcl quantity of {fcl_quantity} not supported"
+            )
+
+    def forward(self: QNN, x: Tensor) -> Tensor:
+        if self.embedding is not None:
+            x = self.embedding(x)
+            x = functional.normalize(x, dim=-1)
+
+        x = self.qnn(x)
+        if self.linear is None:
+            return x
+        elif isinstance(self.linear, nn.Linear):
+            x = self.linear(x)
+            return functional.sigmoid(x)
+        else:
+            raise NotImplementedError("Multiple linear layers not supported")
+
+
+class RQNN(nn.Module):
+    def __init__(
+        self: QNN,
+        vocabulary_size: int,
+        embedding_size: int,
+        hidden_qubit_quantity: int,
+        output_quantity: int,
+        *,
+        hidden_layer_quantity: int,
+        entangling: str = "strong",
+        measurement: str = "expectation",
+        device_name: str = "default.qubit",
+        diff_method: str = "best",
+        shots: int = 1024,
+    ) -> None:
+        super().__init__()
+        embedding_qubit_quantity: int = ceil(log2(embedding_size))
+        self.embedding = nn.Embedding(vocabulary_size, embedding_size)
+
+        self.qnn = _torch_rqnn_layer(
+            embedding_qubit_quantity,
+            hidden_qubit_quantity,
+            hidden_layer_quantity=hidden_layer_quantity,
+            device_name=device_name,
+            entangling=entangling,
+            measurement=measurement,
+            diff_method=diff_method,
+            shots=shots,
         )
+
         self.linear = _define_fcl(
-            wire_quantity, output_quantity, measurement=measurement
+            hidden_qubit_quantity, output_quantity, measurement=measurement
         )
 
     def forward(self: QNN, x: Tensor) -> Tensor:
-        # Must change has_batch_dim in pennylane\qnn\torch.py:forward to True for multi-dimensional inputs
+        x = self.embedding(x)
+        x = functional.normalize(x, dim=-1)
         x = self.qnn(x)
         x = self.linear(x)
         output: Tensor = functional.sigmoid(x)
@@ -100,58 +184,12 @@ def calculate_address_register_size(encode_quantity: int) -> int:
     return ceil(log2(encode_quantity))
 
 
-def basis_encode_nucleotide(
-    nucleotide: Tensor, index: int, address_register_size: int
-) -> None:
-    """
-    One-hot encode nucleotide value into a quantum circuit at the appropriate address.
-
-    Args
-    ----
-    nucleotide: A one-hot encoded nucleotide representation.
-    index: The location of the nucleotide in the sequence.
-    address_register_size: The size of the quantum address register.
-    """
-    controls: list[int] = [int(value) for value in bin(index).split("b")[1]]
-    if len(controls) != address_register_size:
-        controls = [0] * (address_register_size - len(controls)) + controls
-    qml.ctrl(
-        qml.BasisEmbedding,
-        list(range(address_register_size)),
-        control_values=controls,
-    )(
-        nucleotide,
-        list(
-            range(
-                address_register_size,
-                address_register_size + data.UNIQUE_NUCLEOTIDE_QUANTITY,
-            )
-        ),
-    )
-
-
-def basis_encode_all_nucleotides(
-    nucleotides: Tensor,
-) -> None:
-    """
-    One-hot encode nucleotide values into a quantum circuit at appropriate addresses.
-
-    Args
-    ----
-    nucleotides: A sequence of enum-mapped nucleotide values.
-    """
-    sequence_length: int = nucleotides.shape[1]
-    address_register_size: int = calculate_address_register_size(
-        sequence_length
-    )
-    for index in range(sequence_length):
-        basis_encode_nucleotide(
-            nucleotides[:, index, :], index, address_register_size
-        )
-
-
-def amplitude_encode_nucleotide(
-    nucleotide: Tensor, index: int, address_register_size: int
+def _encode_nucleotide(
+    nucleotide: Tensor,
+    index: int,
+    address_register_size: int,
+    *,
+    embedding_qubit_quantity: int = AMPLITUDE_QUBIT_QUANTITY,
 ) -> None:
     """
     Amplitude-encode nucleotide value into a quantum circuit at the appropriate index.
@@ -165,8 +203,8 @@ def amplitude_encode_nucleotide(
     controls: list[int] = [int(value) for value in bin(index).split("b")[1]]
     if len(controls) != address_register_size:
         controls = [0] * (address_register_size - len(controls)) + controls
-    qml.ctrl(
-        qml.AmplitudeEmbedding,
+    qp.ctrl(
+        qp.AmplitudeEmbedding,
         list(range(address_register_size)),
         control_values=controls,
     )(
@@ -174,14 +212,18 @@ def amplitude_encode_nucleotide(
         list(
             range(
                 address_register_size,
-                address_register_size + AMPLITUDE_QUBIT_QUANTITY,
+                address_register_size + embedding_qubit_quantity,
             )
         ),
     )
 
 
-def amplitude_encode_all_nucleotides(
+def _encode_all_nucleotides(
     nucleotides: Tensor,
+    sequence_length: int,
+    address_register_size: int,
+    *,
+    embedding_qubit_quantity: int = AMPLITUDE_QUBIT_QUANTITY,
 ) -> None:
     """
     One-hot encode nucleotide values into a quantum circuit at appropriate addresses.
@@ -190,77 +232,83 @@ def amplitude_encode_all_nucleotides(
     ----
     nucleotides: A sequence of enum-mapped nucleotide values.
     """
-    sequence_length: int = nucleotides.shape[1]
-    address_register_size: int = calculate_address_register_size(
-        sequence_length
-    )
+    for index in range(address_register_size):
+        qp.Hadamard(wires=index)
     for index in range(sequence_length):
-        amplitude_encode_nucleotide(
-            nucleotides[:, index, :], index, address_register_size
-        )
+        if len(nucleotides.shape) == 2:
+            _encode_nucleotide(
+                nucleotides[index],
+                index,
+                address_register_size,
+                embedding_qubit_quantity=embedding_qubit_quantity,
+            )
+        else:
+            _encode_nucleotide(
+                nucleotides[:, index, :],
+                index,
+                address_register_size,
+                embedding_qubit_quantity=embedding_qubit_quantity,
+            )
 
 
 def _device_setup(
-    device_name: str, wire_quantity: int, distribute: bool = False
-) -> qml.devices.Device:
+    device_name: str, wire_quantity: int, *, distribute: bool = False
+) -> qp.devices.Device:
+
     if device_name == "default.qubit":
-        return qml.device(device_name, wires=wire_quantity)
+        return qp.device(device_name, wires=wire_quantity)
 
     if device_name == "lightning.gpu":
         if distribute:
-            return qml.device(device_name, wires=wire_quantity, batch_obs=True)
+            return qp.device(device_name, wires=wire_quantity, batch_obs=True)
         else:
-            return qml.device(device_name, wires=wire_quantity, batch_obs=False)
-
-
-def _encode_all_nucleotides(nucleotides, encoding: str = "amplitude") -> None:
-    if encoding == "amplitude":
-        amplitude_encode_all_nucleotides(nucleotides)
-    elif encoding == "basis":
-        basis_encode_all_nucleotides(nucleotides)
-    else:
-        raise ValueError(f"Unknown encoding type {encoding}")
-
-
-def _determine_wire_quantity(
-    sequence_length: int, encoding: str = "amplitude"
-) -> int:
-    if encoding == "amplitude":
-        return (
-            calculate_address_register_size(sequence_length)
-            + AMPLITUDE_QUBIT_QUANTITY
-        )
-
-    if encoding == "basis":
-        return (
-            calculate_address_register_size(sequence_length)
-            + data.UNIQUE_NUCLEOTIDE_QUANTITY
-        )
-
-    raise ValueError(f"Unknown encoding method {encoding}")
+            return qp.device(device_name, wires=wire_quantity, batch_obs=False)
 
 
 def _apply_entangling_layer(
-    weights: Tensor, wire_quantity: int, *, entangling: str = "basic"
+    weights: Tensor,
+    wire_quantity: int,
+    *,
+    entangling: str = "basic",
+    embedding_qubit_quantity: int = AMPLITUDE_QUBIT_QUANTITY,
 ) -> None:
     if entangling == "basic":
-        qml.BasicEntanglerLayers(weights, wires=list(range(wire_quantity)))
+        qp.BasicEntanglerLayers(
+            weights,
+            wires=list(
+                range(wire_quantity - embedding_qubit_quantity, wire_quantity)
+            ),
+        )
     elif entangling == "strong":
-        qml.StronglyEntanglingLayers(weights, wires=list(range(wire_quantity)))
+        qp.StronglyEntanglingLayers(
+            weights,
+            wires=list(
+                range(wire_quantity - embedding_qubit_quantity, wire_quantity)
+            ),
+        )
     else:
         raise ValueError(f"Unknown entangling layer type {entangling}")
 
 
 def _measure(
-    wire_quantity: int, *, measurement: str = "probability"
-) -> qml.measurements.ProbabilityMP | list[qml.measurements.ExpectationMP]:
+    wire_quantity: int,
+    *,
+    measurement: str = "probability",
+    embedding_qubit_quantity: int = AMPLITUDE_QUBIT_QUANTITY,
+) -> qp.measurements.ProbabilityMP | list[qp.measurements.ExpectationMP]:
     if measurement == "probability":
-        return qml.probs(wires=list(range(wire_quantity)))
+        return qp.probs(
+            wires=list(
+                range(wire_quantity - embedding_qubit_quantity, wire_quantity)
+            )
+        )
 
     if measurement == "expectation":
         return [
-            qml.expval(qml.PauliZ(qubit_index))
-            for qubit_index in range(wire_quantity)
+            qp.expval(qp.PauliZ(qubit_index))
+            for qubit_index in range(
+                wire_quantity - embedding_qubit_quantity, wire_quantity
+            )
         ]
 
     raise ValueError(f"Unknown measurement type {measurement}")
@@ -272,51 +320,197 @@ def _convert_qnode_to_torch_layer(
     wire_quantity: int,
     *,
     entangling: str = "basic",
-) -> qml.qnn.TorchLayer:
+) -> qp.qnn.TorchLayer:
     if entangling == "basic":
         weights: dict[str, tuple[int, int, int]] = {
-            "weights": qml.BasicEntanglerLayers.shape(
-                n_layers=quantum_layer_quantity, n_wires=wire_quantity
+            "weights": qp.BasicEntanglerLayers.shape(
+                n_layers=quantum_layer_quantity,
+                n_wires=wire_quantity,
             )
         }
     elif entangling == "strong":
         weights = {
-            "weights": qml.StronglyEntanglingLayers.shape(
-                n_layers=quantum_layer_quantity, n_wires=wire_quantity
+            "weights": qp.StronglyEntanglingLayers.shape(
+                n_layers=quantum_layer_quantity,
+                n_wires=wire_quantity,
             )
         }
     else:
         raise ValueError(f"Unknown entangling layer type {entangling}")
 
-    return qml.qnn.TorchLayer(qml.transforms.broadcast_expand(qnode), weights)
+    return qp.qnn.TorchLayer(qnode, weights)
 
 
-def define_torch_qnode(
+def _torch_qnn_layer(
     sequence_length: int,
     quantum_layer_quantity: int,
     *,
+    encoding: str = "onehot",
+    embedding_qubit_quantity: int | None = None,
     device_name: str = "default.qubit",
     distribute: bool = False,
-    encoding: str = "amplitude",
     entangling: str = "basic",
     measurement: str = "probability",
     diff_method="adjoint",
-) -> qml.qnn.TorchLayer:
-    wire_quantity: int = _determine_wire_quantity(sequence_length, encoding)
-    device: qml.devices.Device = _device_setup(
-        device_name, wire_quantity, distribute
-    )
-
-    @qml.qnode(device, interface="torch", diff_method=diff_method)
-    def _qnode(inputs: Tensor, weights: Tensor):
-        _encode_all_nucleotides(inputs, encoding)
-        for _ in range(quantum_layer_quantity):
-            _apply_entangling_layer(
-                weights, wire_quantity, entangling=entangling
+) -> qp.qnn.TorchLayer:
+    if encoding == "onehot":
+        wire_quantity: int = (
+            calculate_address_register_size(sequence_length)
+            + AMPLITUDE_QUBIT_QUANTITY
+        )
+        embedding_qubit_quantity = AMPLITUDE_QUBIT_QUANTITY
+    elif encoding == "token":
+        if embedding_qubit_quantity is None or embedding_qubit_quantity < 1:
+            raise ValueError(
+                "Must provide embedding_qubit_quantity if token encoding is desired"
             )
 
-        return _measure(wire_quantity, measurement=measurement)
+        wire_quantity: int = (
+            calculate_address_register_size(sequence_length)
+            + embedding_qubit_quantity
+        )
+    else:
+        raise ValueError(f"Encoding method {encoding} not recognized")
+
+    device: qp.devices.Device = _device_setup(
+        device_name, wire_quantity, distribute=distribute
+    )
+
+    address_register_size: int = calculate_address_register_size(
+        sequence_length
+    )
+
+    @qp.qnode(device, interface="torch", diff_method=diff_method)
+    def _qnode(inputs: Tensor, weights: Tensor):
+        _encode_all_nucleotides(
+            inputs,
+            sequence_length,
+            address_register_size,
+            embedding_qubit_quantity=embedding_qubit_quantity,
+        )
+        _apply_entangling_layer(
+            weights,
+            wire_quantity,
+            entangling=entangling,
+            embedding_qubit_quantity=embedding_qubit_quantity,
+        )
+
+        return _measure(
+            wire_quantity,
+            measurement=measurement,
+            embedding_qubit_quantity=embedding_qubit_quantity,
+        )
 
     return _convert_qnode_to_torch_layer(
-        _qnode, quantum_layer_quantity, wire_quantity, entangling=entangling
+        _qnode,
+        quantum_layer_quantity,
+        embedding_qubit_quantity,
+        entangling=entangling,
+    )
+
+
+def _qrnn_block(
+    weights: Tensor,
+    input_wire_indices: Sequence[int],
+    hidden_wire_indices: Sequence[int],
+    *,
+    entangling: str = "basic",
+) -> None:
+    for input_index in input_wire_indices:
+        for hidden_index in hidden_wire_indices:
+            qp.CNOT(wires=[input_index, hidden_index])
+
+    if entangling == "basic":
+        qp.BasicEntanglerLayers(weights, wires=hidden_wire_indices)
+    elif entangling == "strong":
+        qp.StronglyEntanglingLayers(weights, wires=hidden_wire_indices)
+    else:
+        raise ValueError(f"Unknown entangling layer type {entangling}")
+
+
+def _torch_rqnn_layer(
+    embedding_qubit_quantity: int,
+    hidden_qubit_quantity: int,
+    *,
+    hidden_layer_quantity: int,
+    device_name: str = "default.qubit",
+    entangling: str = "basic",
+    measurement: str = "expectation",
+    diff_method: str = "best",
+    shots: int = 1024,
+) -> qp.qnn.TorchLayer:
+    if diff_method == "adjoint":
+        raise ValueError("RQNN circuit does not support adjoint diff method.")
+
+    wire_quantity: int = embedding_qubit_quantity + hidden_qubit_quantity
+    device: qp.devices.Device = _device_setup(device_name, wire_quantity)
+    input_wire_indices: list[int] = list(range(embedding_qubit_quantity))
+    hidden_wire_indices: list[int] = list(
+        range(embedding_qubit_quantity, wire_quantity)
+    )
+
+    @qp.set_shots(shots)
+    @qp.qnode(
+        device,
+        interface="torch",
+        mcm_method="one-shot",
+        diff_method=diff_method,
+    )
+    def _rqnn_circuit(inputs: Tensor, weights: Tensor) -> None:
+        if len(inputs.shape) == 2:
+            for embedding in inputs:
+                qp.AmplitudeEmbedding(
+                    embedding,
+                    list(range(embedding_qubit_quantity)),
+                    normalize=True,
+                )
+
+                _qrnn_block(
+                    weights,
+                    input_wire_indices=input_wire_indices,
+                    hidden_wire_indices=hidden_wire_indices,
+                    entangling=entangling,
+                )
+
+                for index in input_wire_indices:
+                    qp.measure(index, reset=True)
+
+        elif len(inputs.shape) == 3:
+            for index in range(inputs.shape[1]):
+                qp.AmplitudeEmbedding(
+                    inputs[:, index, :],
+                    list(range(embedding_qubit_quantity)),
+                    normalize=True,
+                )
+
+                _qrnn_block(
+                    weights,
+                    input_wire_indices=input_wire_indices,
+                    hidden_wire_indices=hidden_wire_indices,
+                    entangling=entangling,
+                )
+
+                for index in input_wire_indices:
+                    qp.measure(index, reset=True)
+        else:
+            raise ValueError(f"Invalid inputs shape {inputs.shape}")
+
+        if measurement == "probability":
+            return qp.probs(
+                wires=list(range(embedding_qubit_quantity, wire_quantity))
+            )
+
+        if measurement == "expectation":
+            return [
+                qp.expval(qp.PauliZ(qubit_index))
+                for qubit_index in range(
+                    embedding_qubit_quantity, wire_quantity
+                )
+            ]
+
+    return _convert_qnode_to_torch_layer(
+        _rqnn_circuit,
+        hidden_layer_quantity,
+        wire_quantity=hidden_qubit_quantity,
+        entangling=entangling,
     )

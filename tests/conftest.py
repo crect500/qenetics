@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import pytest
+from transformers import AutoTokenizer
 
 from qenetics.tools import data, dna
 
@@ -54,10 +55,27 @@ def test_single_amplitude_dataset_directory() -> Path:
 
 
 @pytest.fixture
-def test_h5_loader() -> data.H5CpGDataset:
-    return data.H5CpGDataset(
+def test_inputs_h5_file() -> Path:
+    return Path("tests/test_files/test_dataset/c1_032768-065536.h5")
+
+
+@pytest.fixture
+def test_methylation_h5_file() -> Path:
+    return Path("tests/test_files/test_dataset/chr1.h5")
+
+
+@pytest.fixture
+def test_h5_loader() -> data.QuantumTorchDataset:
+    return data.QuantumTorchDataset(
         [
             Path("tests/test_files/test_qcpg_dataset/chr1.h5"),
             Path("tests/test_files/test_qcpg_dataset/chr2.h5"),
-        ]
+        ],
+        encoding=data.ONEHOT_ENCODING_STR,
+        allow_N=True,
     )
+
+
+@pytest.fixture(scope="package")
+def grover_tokenizer() -> AutoTokenizer:
+    return AutoTokenizer.from_pretrained("PoetschLab/GROVER")

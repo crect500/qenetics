@@ -13,9 +13,10 @@ from qenetics.tools import data
 
 
 def test_QuantumTorchDataset(
-    test_qcpg_dataset_directory: Path, test_methylation_h5_file: Path
+    test_qcpg_dataset_directory: Path,
+    test_methylation_h5_file: Path,
+    grover_tokenizer: AutoTokenizer,
 ) -> None:
-    tokenizer = AutoTokenizer.from_pretrained("PoetschLab/GROVER")
     test_files: list[Path] = [
         test_qcpg_dataset_directory / f"chr{i}.h5" for i in ["1", "2"]
     ]
@@ -33,7 +34,7 @@ def test_QuantumTorchDataset(
     assert dataset.labels.sum() == 24
 
     dataset = data.QuantumTorchDataset(
-        test_files, encoding=data.BPE_ENCODING_STR, tokenizer=tokenizer
+        test_files, encoding=data.BPE_ENCODING_STR, tokenizer=grover_tokenizer
     )
     assert dataset.data.shape == (16, 10)
 
@@ -52,7 +53,7 @@ def test_QuantumTorchDataset(
     dataset = data.QuantumTorchDataset(
         [test_methylation_h5_file, test_methylation_h5_file],
         encoding=data.BPE_ENCODING_STR,
-        tokenizer=tokenizer,
+        tokenizer=grover_tokenizer,
     )
     assert dataset.data.shape == (8, 8)
 
@@ -260,13 +261,12 @@ def test_convert_onehot_dataset_to_token(
         _ = data._convert_onehot_dataset_to_token(dataset, "invalid")
 
 
-def test_convert_token_dataset_to_bpe(test_inputs_h5_file: Path) -> None:
-    tokenizer: AutoTokenizer = AutoTokenizer.from_pretrained(
-        "PoetschLab/GROVER"
-    )
+def test_convert_token_dataset_to_bpe(
+    test_inputs_h5_file: Path, grover_tokenizer: AutoTokenizer
+) -> None:
     with h5py.File(test_inputs_h5_file) as dataset:
         samples: Tensor = data._convert_token_dataset_to_bpe(
-            dataset, tokenizer, data.INPUTS_STR
+            dataset, grover_tokenizer, data.INPUTS_STR
         )
 
     assert samples.shape == (10, 16)
@@ -278,16 +278,17 @@ def test_convert_token_dataset_to_bpe(test_inputs_h5_file: Path) -> None:
             match="BPE token conversion is not supported for H5 structure invalid",
         ),
     ):
-        _ = data._convert_token_dataset_to_bpe(dataset, tokenizer, "invalid")
+        _ = data._convert_token_dataset_to_bpe(
+            dataset, grover_tokenizer, "invalid"
+        )
 
 
-def test_convert_onehot_dataset_to_bpe(test_methylation_h5_file: Path) -> None:
-    tokenizer: AutoTokenizer = AutoTokenizer.from_pretrained(
-        "PoetschLab/GROVER"
-    )
+def test_convert_onehot_dataset_to_bpe(
+    test_methylation_h5_file: Path, grover_tokenizer: AutoTokenizer
+) -> None:
     with h5py.File(test_methylation_h5_file) as dataset:
         samples: Tensor = data._convert_onehot_dataset_to_bpe(
-            dataset, tokenizer, data.METHYLATION_STR
+            dataset, grover_tokenizer, data.METHYLATION_STR
         )
 
     assert samples.shape == (4, 8)
@@ -299,7 +300,9 @@ def test_convert_onehot_dataset_to_bpe(test_methylation_h5_file: Path) -> None:
             match="BPE token conversion is not supported for H5 structure invalid",
         ),
     ):
-        _ = data._convert_onehot_dataset_to_bpe(dataset, tokenizer, "invalid")
+        _ = data._convert_onehot_dataset_to_bpe(
+            dataset, grover_tokenizer, "invalid"
+        )
 
 
 def test_retrieve_chromosome_sequences() -> None:

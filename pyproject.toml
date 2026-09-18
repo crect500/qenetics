@@ -15,7 +15,9 @@ dependencies=[
     "numpy",
     "optax",
     "pennylane",
-    "torch"
+    "polars",
+    "torch",
+    "transformers"
 ]
 
 
