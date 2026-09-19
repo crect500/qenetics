@@ -12,7 +12,7 @@ import torch
 import torch.multiprocessing as mp
 from jax import numpy as jnp
 from numpy.typing import NDArray
-from sklearn.metrics import auc, roc_curve
+from sklearn.metrics import roc_auc_score
 from torch import Tensor, nn, optim
 from torch.distributed import destroy_process_group, init_process_group
 from torch.nn.parallel import DistributedDataParallel
@@ -405,6 +405,7 @@ def _train_one_epoch(
     rank: int | None = None,
 ) -> float:
     accumulated_loss: float = 0.0
+    accumulated_batches: int = 0
     return_loss: float = 0.0
     model.train(True)
     if training_parameters.gpu_quantity > 1:
@@ -441,11 +442,12 @@ def _train_one_epoch(
         loss.backward()
         optimizer.step()
         accumulated_loss += loss.item()
+        accumulated_batches += 1
         if (
             batch_index % training_parameters.report_every == 0
             and batch_index != 0
         ):
-            return_loss = accumulated_loss / training_parameters.report_every
+            return_loss = accumulated_loss / accumulated_batches
             logger.info(
                 "Epoch %d - Batch %d loss: %.4f",
                 epoch,
@@ -453,6 +455,7 @@ def _train_one_epoch(
                 return_loss,
             )
             accumulated_loss = 0.0
+            accumulated_batches = 0
 
     return return_loss
 
@@ -465,9 +468,9 @@ def _evaluate_validation_set(
     rank: int | None = None,
 ) -> tuple[float, float]:
     accumulated_loss: float = 0.0
-    accumulated_auc: float = 0.0
     model.eval()
-    invalid_auc_count = 0
+    all_outputs: list[Tensor] = []
+    all_labels: list[Tensor] = []
     with torch.no_grad():
         for batch_index, validation_data in enumerate(validation_loader):
             inputs, labels = validation_data
@@ -476,16 +479,8 @@ def _evaluate_validation_set(
                 labels = labels.to(rank)
             outputs: Tensor = model(inputs)
 
-            if rank is not None:
-                false_positive_rate, true_positive_rate, _ = roc_curve(
-                    labels.cpu().flatten(), outputs.cpu().flatten()
-                )
-            else:
-                false_positive_rate, true_positive_rate, _ = roc_curve(
-                    labels.flatten(), outputs.flatten()
-                )
-
-            accumulated_auc += auc(false_positive_rate, true_positive_rate)
+            all_outputs.append(outputs.detach().cpu().flatten())
+            all_labels.append(labels.detach().cpu().flatten())
 
             if len(labels.shape) > 1:
                 loss: Tensor = nn.functional.binary_cross_entropy(
@@ -512,9 +507,17 @@ def _evaluate_validation_set(
 
             accumulated_loss += loss
 
-    return accumulated_loss / (
-        batch_index + 1 - invalid_auc_count
-    ), accumulated_auc / (batch_index + 1)
+    scores: Tensor = torch.cat(all_outputs)
+    truth: Tensor = torch.cat(all_labels)
+    if truth.min() == truth.max():
+        logger.warning(
+            "Validation set is single-class; AUC is undefined for this epoch."
+        )
+        validation_auc: float = float("nan")
+    else:
+        validation_auc = roc_auc_score(truth.numpy(), scores.numpy())
+
+    return accumulated_loss / (batch_index + 1), validation_auc
 
 
 def _train_all_epochs(
