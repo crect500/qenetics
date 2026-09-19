@@ -62,6 +62,8 @@ class QNN(nn.Module):
             calculate_address_register_size(sequence_length)
             + data_qubit_quantity
         )
+        self.measurement = measurement
+        self.wire_quantity = wire_quantity
 
         self.qnn = _torch_qnn_layer(
             sequence_length,
@@ -96,6 +98,9 @@ class QNN(nn.Module):
             x = functional.normalize(x, dim=-1)
 
         x = self.qnn(x)
+        if self.measurement == "probability":
+            x = x * 2**self.wire_quantity
+
         if self.linear is None:
             return x
         elif isinstance(self.linear, nn.Linear):

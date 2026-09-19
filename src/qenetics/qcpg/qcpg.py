@@ -304,7 +304,10 @@ def _non_nan_indices(truth: Tensor) -> list[int]:
 def _prepare_training(
     training_parameters: TrainingParameters, rank: int | None = None
 ) -> tuple[
-    DataLoader, DataLoader, qcpg_models.QNN | DistributedDataParallel, optim.SGD
+    DataLoader,
+    DataLoader,
+    qcpg_models.QNN | DistributedDataParallel,
+    optim.Optimizer,
 ]:
     training_dataset = data.QuantumTorchDataset(
         [
@@ -373,7 +376,7 @@ def _prepare_training(
     training_loader = DataLoader(
         dataset=training_dataset,
         batch_size=training_parameters.batch_size,
-        shuffle=False,
+        shuffle=training_sampler is None,
         sampler=training_sampler,
         pin_memory=pin_memory,
     )
@@ -388,7 +391,7 @@ def _prepare_training(
         training_loader,
         validation_loader,
         model,
-        optim.SGD(model.parameters(), lr=training_parameters.learning_rate),
+        optim.Adam(model.parameters(), lr=training_parameters.learning_rate),
     )
 
 
@@ -474,11 +477,11 @@ def _evaluate_validation_set(
             outputs: Tensor = model(inputs)
 
             if rank is not None:
-                true_positive_rate, false_positive_rate, _ = roc_curve(
+                false_positive_rate, true_positive_rate, _ = roc_curve(
                     labels.cpu().flatten(), outputs.cpu().flatten()
                 )
             else:
-                true_positive_rate, false_positive_rate, _ = roc_curve(
+                false_positive_rate, true_positive_rate, _ = roc_curve(
                     labels.flatten(), outputs.flatten()
                 )
 
