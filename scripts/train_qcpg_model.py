@@ -210,7 +210,7 @@ if __name__ == "__main__":
         else:
             distribute = False
     else:
-        device_name = "default.qubit"
+        device_name = "lightning.qubit"
         distribute = False
 
     if args.tokenizer is not None:

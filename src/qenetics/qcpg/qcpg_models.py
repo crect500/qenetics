@@ -268,7 +268,7 @@ def _device_setup(
     device_name: str, wire_quantity: int, *, distribute: bool = False
 ) -> qp.devices.Device:
 
-    if device_name == "default.qubit":
+    if device_name in ["default.qubit", "lightning.qubit"]:
         return qp.device(device_name, wires=wire_quantity)
 
     if device_name == "lightning.gpu":
@@ -276,6 +276,8 @@ def _device_setup(
             return qp.device(device_name, wires=wire_quantity, batch_obs=True)
         else:
             return qp.device(device_name, wires=wire_quantity, batch_obs=False)
+
+    raise ValueError(f"Device name {device_name} not recognized")
 
 
 def _apply_entangling_layer(
