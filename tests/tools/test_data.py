@@ -9,7 +9,7 @@ from torch import Tensor
 from torch.utils.data import DataLoader
 from transformers import AutoTokenizer
 
-from qenetics.tools import data
+from qenetics.tools import converters, data
 
 
 def test_QuantumTorchDataset(
@@ -34,7 +34,10 @@ def test_QuantumTorchDataset(
     assert dataset.labels.sum() == 24
 
     dataset = data.QuantumTorchDataset(
-        test_files, encoding=data.BPE_ENCODING_STR, tokenizer=grover_tokenizer
+        test_files,
+        encoding=data.BPE_ENCODING_STR,
+        tokenizer=grover_tokenizer,
+        allow_N=True,
     )
     assert dataset.data.shape == (16, 10)
 
@@ -62,13 +65,16 @@ def test_h5_cpg_data_loader(test_qcpg_dataset_directory: Path) -> None:
     test_files: list[Path] = [
         test_qcpg_dataset_directory / f"chr{i}.h5" for i in ["1", "2"]
     ]
-    data_loader = DataLoader(data.QuantumTorchDataset(test_files), batch_size=1)
+    dataset = data.QuantumTorchDataset(
+        test_files, encoding=data.ONEHOT_ENCODING_STR
+    )
+    data_loader = DataLoader(dataset, batch_size=1)
     for test_samples in data_loader:
         test_sequences, test_labels = test_samples
         assert test_sequences.shape == (1, 10, 4)
         assert test_labels.shape == (1, 4)
 
-    data_loader = DataLoader(data.QuantumTorchDataset(test_files), batch_size=2)
+    data_loader = DataLoader(dataset, batch_size=2)
     for test_samples in data_loader:
         test_sequences, test_labels = test_samples
         assert test_sequences.shape == (2, 10, 4)
@@ -305,78 +311,366 @@ def test_convert_onehot_dataset_to_bpe(
         )
 
 
-def test_retrieve_chromosome_sequences() -> None:
-    experiment_names: list[str] = ["test1", "test2", "test3"]
-    unique_nucleotides_quantity: int = 4
-    profiles_by_position: dict[int, dict[str, float]] = {
-        1: {"test1": 0.0, "test2": 0.25},
-        2: {"test2": 0.5},
-        3: {"test1": 0.75},
-        4: {"test3": 1.0},
-    }
-    sequence_length: int = 8
-    valid_sequence: str = "ACTCGCTG"
-    invalid_sequence: str = "ACTTTCTG"
-    nan_sequence: str = "NNNNNNNN"
-    with mock.patch(
-        "qenetics.tools.dna.find_methylation_sequence"
-    ) as mock_find:
-        mock_find.side_effect = [
-            valid_sequence,
-            invalid_sequence,
-            nan_sequence,
-            valid_sequence,
-        ]
-        sequences, methylation_ratios = data._retrieve_chromosome_sequences(
-            profiles_by_position=profiles_by_position,
-            chromosome="1",
-            fasta_file_descriptor=None,
-            fasta_metadata={},
-            fasta_line_length=20,
-            sequence_length=sequence_length,
-            experiment_names=experiment_names,
+def _reference(sequence: str) -> np.ndarray:
+    return np.frombuffer(sequence.encode(), dtype=np.uint8)
+
+
+def _write_fasta(
+    fasta_filepath: Path,
+    sequences: dict[str, str],
+    line_length: int = 60,
+    newline: str = "\n",
+) -> None:
+    with fasta_filepath.open("w", newline="") as fd:
+        for name, sequence in sequences.items():
+            fd.write(
+                f">{name} dna:chromosome chromosome:GRCm38:{name}:1:"
+                f"{len(sequence)}:1 REF{newline}"
+            )
+            for start in range(0, len(sequence), line_length):
+                fd.write(sequence[start : start + line_length] + newline)
+
+
+def _counts(rows: list[tuple[int, int, int, int]]) -> np.ndarray:
+    return np.array(rows, dtype=np.int64).reshape(-1, 4)
+
+
+def test_find_methylation_filepaths(caplog: pytest.LogCaptureFixture) -> None:
+    with TemporaryDirectory() as temp_dir:
+        temp_path = Path(temp_dir)
+        for filename in [
+            "cellB.cov.txt",
+            "cellA.CpG.txt.gz",
+            "RSC27_4.cov.txt",
+        ]:
+            (temp_path / filename).touch()
+
+        with caplog.at_level("WARNING", logger="qenetics.tools.data"):
+            filepaths_by_experiment = data._find_methylation_filepaths(
+                temp_path, ["RSC27_4", "Ca26"]
+            )
+
+        assert filepaths_by_experiment == {
+            "cellA": temp_path / "cellA.CpG.txt.gz",
+            "cellB": temp_path / "cellB.cov.txt",
+        }
+        assert "Excluded experiment Ca26 not found" in caplog.text
+
+        (temp_path / "cellA.cov.txt").touch()
+        with pytest.raises(ValueError, match="share the experiment name"):
+            _ = data._find_methylation_filepaths(temp_path)
+
+
+def test_read_methylation_counts() -> None:
+    with TemporaryDirectory() as temp_dir:
+        temp_path = Path(temp_dir)
+        cov_filepath = temp_path / "cellA.cov.txt"
+        cov_filepath.write_text("chr1\t5\t5\t50\t1\t1\n2\t9\t9\t0\t0\t3\n")
+        cpg_filepath = temp_path / "cellB.CpG.txt"
+        cpg_filepath.write_text(
+            "#Chr\tPos\tRef\tChain\tTotal\tMet\tUnMet\tMetRate\tRef_context"
+            "\tType\n"
+            "chr1\t6\tG\t-\t4\t4\t0\t1.0\tCGA\tCpG\n"
         )
 
-    assert sequences.shape == (2, sequence_length, unique_nucleotides_quantity)
-    assert methylation_ratios[0][0] == 0.0
-    assert methylation_ratios[1][2] == 1.0
+        counts_by_chromosome = data.read_methylation_counts(
+            [cov_filepath, cpg_filepath]
+        )
+
+    assert set(counts_by_chromosome) == {"1", "2"}
+    assert counts_by_chromosome["1"].tolist() == [[5, 1, 1, 0], [6, 4, 0, 1]]
+    assert counts_by_chromosome["2"].tolist() == [[9, 0, 3, 0]]
 
 
 @pytest.mark.parametrize(
-    ("sequence", "expected_result"),
+    ("position", "expected_index"),
     [
-        ("ACGT", True),
-        ("ATCGTA", True),
-        ("AGCT", False),
-        ("CGAT", False),
-        ("ATCG", False),
+        (3, 2),  # C of the first CpG
+        (4, 2),  # G of the first CpG, reverse strand call
+        (1, -1),  # A
+        (5, -1),  # T
+        (7, 6),  # C of the CpG at the end of the reference
+        (8, 6),  # G of the CpG at the end of the reference
+        (0, -1),  # before the reference
+        (9, -1),  # after the reference
     ],
 )
-def test_validate_sequence(sequence: str, expected_result: bool) -> None:
-    assert data._validate_sequence(sequence) == expected_result
+def test_locate_cpg_sites(position: int, expected_index: int) -> None:
+    reference = _reference("AACGTACG")
+    assert data.locate_cpg_sites(
+        reference, np.array([position], dtype=np.int64)
+    ).tolist() == [expected_index]
 
 
-def test_create_h5_dataset() -> None:
-    experiment_names: list[str] = ["test1", "test2", "test3"]
-    sequences: np.ndarray = np.array(
-        [[[1, 0, 0, 0], [0, 1, 0, 0]], [[0, 0, 1, 0], [0, 0, 0, 1]]], dtype=int
+def test_aggregate_cpg_counts() -> None:
+    cpg_indices = np.array([10, 10, 10, 20, 30, 30], dtype=np.int64)
+    counts = _counts(
+        [
+            (11, 1, 1, 0),  # forward strand of site 10, experiment 0
+            (12, 1, 0, 0),  # reverse strand of site 10, experiment 0
+            (11, 1, 1, 1),  # tie in experiment 1
+            (21, 0, 2, 0),
+            (31, 1, 0, 0),  # below minimum reads
+            (31, 3, 1, 1),
+        ]
     )
-    methylation_ratios: np.ndarray = np.array(
-        [[0.0, np.nan, np.nan], [np.nan, 0.50, 1.0]]
+
+    sites, labels = data.aggregate_cpg_counts(
+        cpg_indices, counts, experiment_quantity=2, minimum_reads=2
+    )
+    assert sites.tolist() == [10, 20, 30]
+    np.testing.assert_array_equal(
+        labels, np.array([[1.0, 0.0], [0.0, np.nan], [np.nan, 1.0]])
+    )
+
+    sites, labels = data.aggregate_cpg_counts(
+        cpg_indices, counts, experiment_quantity=2, binarize=False
+    )
+    assert sites.tolist() == [10, 20, 30]
+    np.testing.assert_allclose(
+        labels,
+        np.array([[2 / 3, 0.5], [0.0, np.nan], [1.0, 0.75]]),
+        rtol=1e-6,
+    )
+
+
+@pytest.mark.parametrize(
+    ("sequence_length", "expected_start"),
+    [(1001, 500), (5, 8), (4, 9), (2, 10)],
+)
+def test_window_starts(sequence_length: int, expected_start: int) -> None:
+    sites = np.array([10], dtype=np.int64)
+    if sequence_length == 1001:
+        sites = np.array([1000], dtype=np.int64)
+    assert data.window_starts(sites, sequence_length).tolist() == [
+        expected_start
+    ]
+
+
+def test_append_to_dataset() -> None:
+    with (
+        TemporaryDirectory() as temp_dir,
+        h5py.File(Path(temp_dir) / "test.h5", "w") as fd,
+    ):
+        dataset = data._create_resizable_dataset(fd, "values", (2,), "i8")
+        data._append_to_dataset(dataset, np.array([[1, 2]]))
+        data._append_to_dataset(dataset, np.empty((0, 2)))
+        data._append_to_dataset(dataset, np.array([[3, 4], [5, 6]]))
+        assert dataset[()].tolist() == [[1, 2], [3, 4], [5, 6]]
+
+
+@pytest.mark.parametrize("allow_N", [False, True])
+def test_write_chromosome_h5(allow_N: bool) -> None:
+    #                      0123456789012345
+    reference = _reference("ATCGATNCGTACGTCG")
+    sites = np.array([2, 7, 11, 14], dtype=np.int64)
+    labels = np.array(
+        [[1.0, np.nan], [0.0, 1.0], [np.nan, 0.0], [1.0, 1.0]],
+        dtype=np.float32,
     )
     with TemporaryDirectory() as temp_dir:
-        temp_h5_filepath = Path(temp_dir) / "chr1.h5"
-        data._create_h5_dataset(
-            temp_h5_filepath, sequences, methylation_ratios, experiment_names
+        h5_filepath = Path(temp_dir) / "chr1.h5"
+        samples_written = data._write_chromosome_h5(
+            h5_filepath,
+            reference,
+            sites,
+            labels,
+            ["cellA", "cellB"],
+            5,
+            allow_N=allow_N,
         )
-        with h5py.File(temp_h5_filepath) as fd:
-            assert fd["methylation_sequences"].shape == (2, 2, 4)
-            assert fd["methylation_ratios"]["test1"][0] == 0.0
-            assert np.isnan(fd["methylation_ratios"]["test1"][1])
-            assert np.isnan(fd["methylation_ratios"]["test2"][0])
-            assert fd["methylation_ratios"]["test2"][1] == 0.5
-            assert np.isnan(fd["methylation_ratios"]["test3"][0])
-            assert fd["methylation_ratios"]["test3"][1] == 1.0
+        with h5py.File(h5_filepath) as fd:
+            sequences = [
+                converters.one_hot_sequence_to_nucleotide_str(
+                    sequence, allow_N=True
+                )
+                for sequence in fd[data.METHYLATION_SEQUENCES_KEY]
+            ]
+            positions = fd[data.POSITIONS_KEY][()].tolist()
+            ratios_a = fd[data.METHYLATION_RATIOS_KEY]["cellA"][()]
+            ratios_b = fd[data.METHYLATION_RATIOS_KEY]["cellB"][()]
+
+    # Site 14 is dropped because its window exceeds the reference.
+    if allow_N:
+        assert samples_written == 3
+        assert sequences == ["ATCGA", "TNCGT", "TACGT"]
+        assert positions == [3, 8, 12]
+        np.testing.assert_array_equal(ratios_a, [1.0, 0.0, np.nan])
+        np.testing.assert_array_equal(ratios_b, [np.nan, 1.0, 0.0])
+    else:
+        assert samples_written == 2
+        assert sequences == ["ATCGA", "TACGT"]
+        assert positions == [3, 12]
+        np.testing.assert_array_equal(ratios_a, [1.0, np.nan])
+        np.testing.assert_array_equal(ratios_b, [np.nan, 0.0])
+
+
+@pytest.mark.parametrize(
+    ("newline", "sequence_length"),
+    [("\n", 11), ("\r\n", 11), ("\n", 10), ("\n", 1001)],
+)
+def test_create_h5_dataset_from_methylation_profiles(
+    newline: str, sequence_length: int, caplog: pytest.LogCaptureFixture
+) -> None:
+    rng = np.random.default_rng(0)
+    chromosome_sequences: dict[str, str] = {
+        name: "".join(rng.choice(list("ACGT"), size=length))
+        for name, length in [("1", 5003), ("2", 2999)]
+    }
+    # Lowercase soft-masked nucleotides must be treated as uppercase.
+    chromosome_sequences["2"] = (
+        chromosome_sequences["2"][:1000].lower()
+        + chromosome_sequences["2"][1000:]
+    )
+    upper_sequences = {
+        name: sequence.upper()
+        for name, sequence in chromosome_sequences.items()
+    }
+    cpg_positions: dict[str, list[int]] = {
+        name: [
+            index + 1
+            for index in range(len(sequence) - 1)
+            if sequence[index : index + 2] == "CG"
+        ]
+        for name, sequence in upper_sequences.items()
+    }
+    non_cpg_position: int = next(
+        position
+        for position in range(2, len(upper_sequences["1"]))
+        if "CG"
+        not in (
+            upper_sequences["1"][position - 1 : position + 1],
+            upper_sequences["1"][position - 2 : position],
+        )
+    )
+    cell_b_positions: list[int] = cpg_positions["1"][::2]
+
+    with TemporaryDirectory() as temp_dir:
+        temp_path = Path(temp_dir)
+        fasta_filepath = temp_path / "genome.fa"
+        _write_fasta(fasta_filepath, chromosome_sequences, newline=newline)
+        methylation_directory = temp_path / "methylation"
+        methylation_directory.mkdir()
+        output_directory = temp_path / "output"
+        output_directory.mkdir()
+
+        # cellA: Bismark coverage, forward strand, 1 methylated read.
+        # cellB: Hou et al. CpG report, reverse strand at the G, 1 methylated
+        # and 2 unmethylated reads.
+        # Ca26: excluded.
+        with (methylation_directory / "cellA.cov.txt").open("w") as fd:
+            for chromosome, positions in cpg_positions.items():
+                for position in positions:
+                    fd.write(
+                        f"chr{chromosome}\t{position}\t{position}\t100\t1\t0\n"
+                    )
+            fd.write(  # not a CpG in the reference
+                f"chr1\t{non_cpg_position}\t{non_cpg_position}\t100\t1\t0\n"
+            )
+            fd.write("chrY\t10\t10\t100\t1\t0\n")  # not in the reference
+        with (methylation_directory / "cellB.CpG.txt").open("w") as fd:
+            fd.write("#Chr\tPos\tRef\tChain\tTotal\tMet\tUnMet\tMetRate\n")
+            for position in cell_b_positions:
+                fd.write(
+                    f"chr1\t{position + 1}\tG\t-\t3\t1\t2\t0.33\tCGA\tCpG\n"
+                )
+        (methylation_directory / "Ca26.cov.txt").write_text(
+            "1\t5\t5\t100\t1\t0\n"
+        )
+
+        with caplog.at_level("WARNING", logger="qenetics.tools.data"):
+            data.create_h5_dataset_from_methylation_profiles(
+                methylation_directory,
+                fasta_filepath,
+                output_directory,
+                sequence_length,
+                excluded_experiments=["Ca26"],
+            )
+
+        chromosome_1_calls: int = (
+            len(cpg_positions["1"]) + 1 + len(cell_b_positions)
+        )
+        assert (
+            f"1 of {chromosome_1_calls} methylation calls on chromosome 1 are "
+            "not at a CpG site"
+        ) in caplog.text
+        assert "chromosome 2 are not at a CpG site" not in caplog.text
+        assert "chromosome Y, which is not" in caplog.text
+        assert sorted(path.name for path in output_directory.iterdir()) == [
+            "chr1.h5",
+            "chr2.h5",
+        ]
+
+        offset: int = (sequence_length - 1) // 2
+        for chromosome, sequence in upper_sequences.items():
+            expected_positions = [
+                position
+                for position in cpg_positions[chromosome]
+                if position - 1 - offset >= 0
+                and position - 1 - offset + sequence_length <= len(sequence)
+            ]
+            with h5py.File(output_directory / f"chr{chromosome}.h5") as fd:
+                positions = fd[data.POSITIONS_KEY][()].tolist()
+                windows = [
+                    converters.one_hot_sequence_to_nucleotide_str(window)
+                    for window in fd[data.METHYLATION_SEQUENCES_KEY]
+                ]
+                ratios = fd[data.METHYLATION_RATIOS_KEY]
+                assert list(ratios) == ["cellA", "cellB"]
+                ratios_a = ratios["cellA"][()]
+                ratios_b = ratios["cellB"][()]
+
+            assert positions == expected_positions
+            for position, window in zip(positions, windows, strict=True):
+                start = position - 1 - offset
+                assert window == sequence[start : start + sequence_length]
+                assert window[offset : offset + 2] == "CG"
+
+            assert (ratios_a == 1.0).all()
+            for position, ratio in zip(positions, ratios_b, strict=True):
+                if chromosome == "1" and position in cell_b_positions:
+                    assert ratio == 0.0
+                else:
+                    assert np.isnan(ratio)
+
+        dataset = data.QuantumTorchDataset(
+            [output_directory / "chr1.h5", output_directory / "chr2.h5"],
+            encoding=data.ONEHOT_ENCODING_STR,
+        )
+        assert dataset.data.shape[1:] == (sequence_length, 4)
+        assert dataset.labels.shape[1] == 2
+
+
+def test_create_h5_dataset_from_methylation_profiles_minimum_reads() -> None:
+    sequence: str = "ATATACGATATATACGATATA"
+    with TemporaryDirectory() as temp_dir:
+        temp_path = Path(temp_dir)
+        fasta_filepath = temp_path / "genome.fa"
+        _write_fasta(fasta_filepath, {"1": sequence}, line_length=8)
+        methylation_directory = temp_path / "methylation"
+        methylation_directory.mkdir()
+        # Site at 6 has 2 + 2 reads across both strands, site at 15 has 3.
+        (methylation_directory / "cell.cov.txt").write_text(
+            "1\t6\t6\t100\t2\t0\n1\t7\t7\t0\t0\t2\n1\t15\t15\t100\t3\t0\n"
+        )
+
+        data.create_h5_dataset_from_methylation_profiles(
+            methylation_directory,
+            fasta_filepath,
+            temp_path,
+            5,
+            minimum_samples=4,
+            binarize=False,
+        )
+        with h5py.File(temp_path / "chr1.h5") as fd:
+            assert fd[data.POSITIONS_KEY][()].tolist() == [6]
+            assert fd[data.METHYLATION_RATIOS_KEY]["cell"][()].tolist() == [0.5]
+            assert (
+                converters.one_hot_sequence_to_nucleotide_str(
+                    fd[data.METHYLATION_SEQUENCES_KEY][0]
+                )
+                == "TACGA"
+            )
 
 
 @pytest.mark.parametrize(
@@ -418,9 +712,8 @@ def test_reduce_sample_size(test_single_amplitude_dataset_directory) -> None:
         data._reduce_sample_size(test_filepath, temp_path, new_size)
         with (
             h5py.File(test_filepath) as original_dataset,
-            h5py.File(
-                temp_path / (test_filepath.stem + "_" + str(new_size) + ".h5")
-            ) as new_dataset,
+            # Training loads files by name, e.g. chr1.h5, so the name is kept.
+            h5py.File(temp_path / test_filepath.name) as new_dataset,
         ):
             original_sequences: h5py.Dataset = original_dataset[
                 data.METHYLATION_SEQUENCES_KEY

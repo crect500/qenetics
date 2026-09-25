@@ -131,7 +131,7 @@ def test_train_one_epoch_with_nans(
     model = qcpg_models.QNN(sequence_length, layer_quantity, output_quantity)
     training_parameters = qcpg.TrainingParameters(
         data_directory=Path("."),
-        output_filepath=Path("."),
+        output_directory=Path("."),
         l1_regularizer=0.1,
         l2_regularizer=0.1,
     )
@@ -142,8 +142,8 @@ def test_train_one_epoch_with_nans(
     ):
         mock_get.side_effect = [
             (
-                [tensor([[0, 0, 0, 1], [0, 0, 1, 0]], dtype=torch.float)],
-                [tensor([1.0, nan], dtype=torch.float)],
+                tensor([[[0, 0, 0, 1], [0, 0, 1, 0]]], dtype=torch.float),
+                tensor([[1.0, nan]], dtype=torch.float),
             )
         ]
         _ = qcpg._train_one_epoch(
@@ -153,6 +153,63 @@ def test_train_one_epoch_with_nans(
             optim.SGD(model.parameters(), lr=0.01),
             training_parameters,
         )
+
+    assert all(parameter.isfinite().all() for parameter in model.parameters())
+
+
+def test_observed_loss() -> None:
+    outputs = tensor([[0.8, 0.3], [0.6, 0.1]], dtype=torch.float)
+    labels = tensor([[1.0, nan], [nan, 0.0]], dtype=torch.float)
+    assert qcpg._observed_loss(outputs, labels).item() == pytest.approx(
+        torch.nn.functional.binary_cross_entropy(
+            tensor([0.8, 0.1]), tensor([1.0, 0.0])
+        ).item()
+    )
+
+    single_outputs = tensor([[0.8], [0.3]], dtype=torch.float)
+    single_labels = tensor([nan, 0.0], dtype=torch.float)
+    assert qcpg._observed_loss(
+        single_outputs, single_labels
+    ).item() == pytest.approx(
+        torch.nn.functional.binary_cross_entropy(
+            tensor([0.3]), tensor([0.0])
+        ).item()
+    )
+
+    assert qcpg._observed_loss(outputs, torch.full((2, 2), nan)) is None
+
+
+def test_evaluate_validation_set_with_nans(
+    test_h5_loader: data.QuantumTorchDataset,
+) -> None:
+    model = qcpg_models.QNN(2, 1, 2)
+    training_parameters = qcpg.TrainingParameters(
+        data_directory=Path("."),
+        output_directory=Path("."),
+    )
+    with mock.patch(
+        "qenetics.tools.data.QuantumTorchDataset.__getitem__"
+    ) as mock_get:
+        mock_get.side_effect = [
+            (
+                tensor([[[0, 0, 1, 0], [1, 0, 0, 0]]], dtype=torch.float),
+                tensor([[0.0, nan]], dtype=torch.float),
+            ),
+            (
+                tensor([[[0, 0, 0, 1], [0, 0, 1, 0]]], dtype=torch.float),
+                tensor([[nan, nan]], dtype=torch.float),
+            ),
+            (
+                tensor([[[0, 1, 0, 0], [0, 0, 1, 0]]], dtype=torch.float),
+                tensor([[nan, 1.0]], dtype=torch.float),
+            ),
+        ]
+        loss, auc = qcpg._evaluate_validation_set(
+            model, test_h5_loader, training_parameters
+        )
+
+    assert np.isfinite(float(loss))
+    assert np.isfinite(auc)
 
 
 def test_evaluate_validation_set(

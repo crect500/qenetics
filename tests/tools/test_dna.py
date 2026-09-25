@@ -94,7 +94,7 @@ def test_find_next_comment() -> None:
 
 def test_extract_fasta_metadata() -> None:
     annotations: dict[str, dna.SequenceInfo] = dna.extract_fasta_metadata(
-        Path("tests/test_files/test_sequence.fa"), crlf=True
+        Path("tests/test_files/test_sequence.fa")
     )
     assert len(annotations) == 3
 
@@ -106,6 +106,65 @@ def test_extract_fasta_metadata() -> None:
 
     assert annotations["3"].length == 50
     assert annotations["3"].file_position == 285
+
+
+def _write_fasta(
+    fasta_filepath: Path,
+    sequences: dict[str, str],
+    line_length: int,
+    newline: str,
+) -> None:
+    with fasta_filepath.open("w", newline="") as fd:
+        for name, sequence in sequences.items():
+            fd.write(
+                f">{name} dna:chromosome chromosome:GRCm38:{name}:1:"
+                f"{len(sequence)}:1 REF{newline}"
+            )
+            for start in range(0, len(sequence), line_length):
+                fd.write(sequence[start : start + line_length] + newline)
+
+
+@pytest.mark.parametrize(
+    ("newline", "expected_result"), [("\n", False), ("\r\n", True)]
+)
+def test_is_crlf(newline: str, expected_result: bool) -> None:
+    with TemporaryDirectory() as temp_dir:
+        fasta_filepath = Path(temp_dir) / "genome.fa"
+        _write_fasta(fasta_filepath, {"1": "ACGT"}, 2, newline)
+        assert dna.is_crlf(fasta_filepath) == expected_result
+
+
+@pytest.mark.parametrize("newline", ["\n", "\r\n"])
+def test_read_chromosome(newline: str) -> None:
+    sequences: dict[str, str] = {
+        "1": "ACGTACGTAC",  # full last line
+        "2": "acgtNNacgtA",  # soft-masked with a partial last line
+        "3": "GGCC",
+    }
+    with TemporaryDirectory() as temp_dir:
+        fasta_filepath = Path(temp_dir) / "genome.fa"
+        _write_fasta(fasta_filepath, sequences, 5, newline)
+        metadata: dict[str, dna.SequenceInfo] = dna.extract_fasta_metadata(
+            fasta_filepath
+        )
+        assert list(metadata) == ["1", "2", "3"]
+        for name, sequence in sequences.items():
+            assert (
+                dna.read_chromosome(fasta_filepath, metadata[name], 5)
+                == sequence.upper().encode()
+            )
+
+
+def test_read_chromosome_invalid_metadata() -> None:
+    with TemporaryDirectory() as temp_dir:
+        fasta_filepath = Path(temp_dir) / "genome.fa"
+        _write_fasta(fasta_filepath, {"1": "ACGT", "2": "ACGT"}, 2, "\n")
+        metadata: dict[str, dna.SequenceInfo] = dna.extract_fasta_metadata(
+            fasta_filepath
+        )
+        metadata["1"].length = 6
+        with pytest.raises(ValueError, match="Expected a sequence of length 6"):
+            _ = dna.read_chromosome(fasta_filepath, metadata["1"], 2)
 
 
 @pytest.mark.parametrize(

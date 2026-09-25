@@ -1,4 +1,4 @@
-from argparse import ArgumentParser, Namespace
+from argparse import ArgumentParser, BooleanOptionalAction, Namespace
 from pathlib import Path
 
 from qenetics.tools.data import (
@@ -41,7 +41,8 @@ def _parse_script_args() -> Namespace:
         dest="sequence_length",
         type=int,
         required=True,
-        help="The window of nucleotides around the CpG site to retrieve.",
+        help="The length of the window of nucleotides centered on and "
+        "including each CpG site, e.g. 1001.",
     )
     parser.add_argument(
         "-m",
@@ -50,7 +51,34 @@ def _parse_script_args() -> Namespace:
         type=int,
         required=False,
         default=1,
-        help="The minimum experiments for a site to be considered.",
+        help="The minimum reads of a CpG site in an experiment, summed over "
+        "both strands, for the site to be labeled, e.g. 4 for scRRBS-seq.",
+    )
+    parser.add_argument(
+        "-x",
+        "--exclude",
+        dest="excluded_experiments",
+        nargs="+",
+        default=[],
+        help="The names of experiments to leave out, matching the part of "
+        "each methylation filename before the first '.', e.g. the cells "
+        "RSC27_4, RSC27_7 and Ca26.",
+    )
+    parser.add_argument(
+        "--binarize",
+        dest="binarize",
+        action=BooleanOptionalAction,
+        default=True,
+        help="Label sites methylated if they have more methylated than "
+        "unmethylated reads, and unmethylated otherwise. Use --no-binarize "
+        "to label sites with methylation ratios instead.",
+    )
+    parser.add_argument(
+        "--allow-N",
+        dest="allow_N",
+        action="store_true",
+        help="Keep windows holding nucleotides other than A, T, C and G, "
+        "encoded as all zeros. By default, such windows are dropped.",
     )
 
     return parser.parse_args()
@@ -64,4 +92,7 @@ if __name__ == "__main__":
         args.output_directory,
         args.sequence_length,
         args.minimum_samples,
+        excluded_experiments=args.excluded_experiments,
+        binarize=args.binarize,
+        allow_N=args.allow_N,
     )

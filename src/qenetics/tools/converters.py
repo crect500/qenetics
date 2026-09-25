@@ -22,6 +22,8 @@ def nucleotide_character_to_numpy(
     """
     Convert a nucleotide designator to a one-hot array.
 
+    A = [1, 0, 0, 0], T = [0, 1, 0, 0], G = [0, 0, 1, 0], C = [0, 0, 0, 1].
+
     Args
     ----
     nucleotide: The ASCII nucleotide designator.
@@ -34,9 +36,9 @@ def nucleotide_character_to_numpy(
         return np.array([1, 0, 0, 0], dtype=int)
     if nucleotide == "T":
         return np.array([0, 1, 0, 0], dtype=int)
-    if nucleotide == "C":
-        return np.array([0, 0, 1, 0], dtype=int)
     if nucleotide == "G":
+        return np.array([0, 0, 1, 0], dtype=int)
+    if nucleotide == "C":
         return np.array([0, 0, 0, 1], dtype=int)
     if nucleotide == "N":
         if encoding == "amplitude":
@@ -77,7 +79,8 @@ def nucleotide_integer_to_numpy(nucleotide: int) -> NDArray[int]:
 
     Args
     ----
-    nucleotide: The nucleotide integer.
+    nucleotide: The nucleotide integer, with A = 0, T = 1, G = 2, C = 3 and
+        -1 for an unknown nucleotide.
 
     Returns
     -------
@@ -121,6 +124,8 @@ def samples_to_numpy(
     """
     Create input and truth samples for sequences of nucleotides and their methylations.
 
+    Sequences holding unknown nucleotides ('N') are skipped.
+
     Args
     ----
     methylation_filepath: The filepath of a file containing methylation_profiles.
@@ -145,11 +150,10 @@ def samples_to_numpy(
                 ),
             )
             for line in csv_reader
+            if "N" not in line["sequence"]
         ]
-        return np.array(
-            [row[0] for row in read_data if row[0] is not None], dtype=int
-        ), np.array(
-            [row[1] for row in read_data if row[0] is not None], dtype=int
+        return np.array([row[0] for row in read_data], dtype=int), np.array(
+            [row[1] for row in read_data], dtype=int
         )
 
 
@@ -175,9 +179,9 @@ def _integer_to_nucleotide_char(value: int, allow_N: bool = False) -> str:
     if value == 1:
         return "T"
     if value == 2:
-        return "C"
-    if value == 3:
         return "G"
+    if value == 3:
+        return "C"
 
     if value == -1:
         if allow_N:
@@ -237,9 +241,9 @@ def _one_hot_to_nucleotide(
     if all(one_hot_array == np.array([0, 1, 0, 0])):
         return "T"
     if all(one_hot_array == np.array([0, 0, 1, 0])):
-        return "C"
-    if all(one_hot_array == np.array([0, 0, 0, 1])):
         return "G"
+    if all(one_hot_array == np.array([0, 0, 0, 1])):
+        return "C"
 
     if all(np.array(one_hot_array) == np.array([0, 0, 0, 0])):
         if allow_N:

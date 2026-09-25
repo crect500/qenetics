@@ -84,7 +84,7 @@ def create_samples(
             output_directory=output_filepath,
             minimum_samples=minimum_samples,
         )
-    elif methylation_filepath.is_file() and output_filepath.is_file():
+    elif methylation_filepath.is_file() and not output_filepath.is_dir():
         create_sequence_dataset(
             methylation_filepath=methylation_filepath,
             fasta_file=fasta_filepath,

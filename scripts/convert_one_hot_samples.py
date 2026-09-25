@@ -26,12 +26,12 @@ def _parse_script_args() -> Namespace:
     )
     parser.add_argument(
         "-z",
+        "--allow-N",
         "--include-zero",
-        dest="include_zero",
-        type=bool,
-        required=False,
-        default=False,
-        help="Whether or not to treat an array of zeros ('N') as a valid encoding",
+        dest="allow_N",
+        action="store_true",
+        help="Treat an array of zeros ('N') as a valid encoding, encoded as 0 "
+        "with A, T, G and C encoded as 1 to 4.",
     )
 
     return parser.parse_args()
@@ -41,5 +41,5 @@ if __name__ == "__main__":
     args = _parse_script_args()
     for filepath in args.input_directory.iterdir():
         converters.h5_one_hot_to_integer(
-            filepath, args.output_directory, include_zero=args.include_zero
+            filepath, args.output_directory, allow_N=args.allow_N
         )

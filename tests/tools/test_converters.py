@@ -7,12 +7,12 @@ import pytest
 from h5py import File
 from numpy.typing import NDArray
 
-from qenetics.tools import converters
+from qenetics.tools import converters, data, dna
 
 
 @pytest.mark.parametrize(
     ("nucleotide", "expected_int"),
-    [("A", 0), ("T", 1), ("C", 2), ("G", 3), ("N", -1), ("x", -2)],
+    [("A", 0), ("T", 1), ("G", 2), ("C", 3), ("N", -1), ("x", -2)],
 )
 def test_nucleotide_character_to_numpy(
     nucleotide: str, expected_int: int
@@ -40,13 +40,47 @@ def test_nucleotide_character_to_numpy(
 
 
 @pytest.mark.parametrize(
+    ("nucleotide", "expected_one_hot"),
+    [
+        ("A", [1, 0, 0, 0]),
+        ("T", [0, 1, 0, 0]),
+        ("G", [0, 0, 1, 0]),
+        ("C", [0, 0, 0, 1]),
+    ],
+)
+def test_deepcpg_one_hot_encoding(
+    nucleotide: str, expected_one_hot: list[int]
+) -> None:
+    assert converters.nucleotide_character_to_numpy(nucleotide).tolist() == (
+        expected_one_hot
+    )
+    nucleotide_integer: int = dna.convert_nucleotide_to_enum(nucleotide).value
+    assert expected_one_hot[nucleotide_integer] == 1
+    assert (
+        converters.nucleotide_integer_to_numpy(nucleotide_integer).tolist()
+        == expected_one_hot
+    )
+    assert (
+        converters._integer_to_nucleotide_char(nucleotide_integer) == nucleotide
+    )
+    assert (
+        converters._one_hot_to_nucleotide(np.array(expected_one_hot))
+        == nucleotide
+    )
+    assert data._ONE_HOT_NUCLEOTIDES[ord(nucleotide)].tolist() == (
+        expected_one_hot
+    )
+
+
+@pytest.mark.parametrize(
     ("sequence", "expected_array"),
     [
         ("A", [0]),
         ("AT", [0, 1]),
-        ("ATC", [0, 1, 2]),
-        ("ATCG", [0, 1, 2, 3]),
-        ("NATCGN", [-1, 0, 1, 2, 3, -1]),
+        ("ATG", [0, 1, 2]),
+        ("ATGC", [0, 1, 2, 3]),
+        ("ATCG", [0, 1, 3, 2]),
+        ("NATGCN", [-1, 0, 1, 2, 3, -1]),
     ],
 )
 def test_nucleotide_string_to_numpy(
@@ -140,8 +174,8 @@ def test_samples_to_numpy(
     [
         (0, False, "A"),
         (1, False, "T"),
-        (2, False, "C"),
-        (3, False, "G"),
+        (2, False, "G"),
+        (3, False, "C"),
         (-1, False, ""),
         (-1, True, "N"),
         (-3, False, ""),
@@ -168,7 +202,7 @@ def test_integer_to_nucleotide_char(
 
 @pytest.mark.parametrize(
     ("values", "expected_result"),
-    [([], ""), ([0], "A"), ([0, 1, 2, 3], "ATCG")],
+    [([], ""), ([0], "A"), ([0, 1, 2, 3], "ATGC")],
 )
 def test_integer_array_to_nucleotide_str(
     values: list[int], expected_result: str
@@ -181,8 +215,8 @@ def test_integer_array_to_nucleotide_str(
     [
         ([1, 0, 0, 0], False, "A"),
         ([0, 1, 0, 0], False, "T"),
-        ([0, 0, 1, 0], False, "C"),
-        ([0, 0, 0, 1], False, "G"),
+        ([0, 0, 1, 0], False, "G"),
+        ([0, 0, 0, 1], False, "C"),
         ([0, 0, 0, 0], False, ""),
         ([0, 0, 0, 0], True, "N"),
         ([1, 0, 0, 1], False, ""),
@@ -215,7 +249,7 @@ def test_one_hot_to_nucleotide(
     [
         ([], ""),
         ([[1, 0, 0, 0]], "A"),
-        ([[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]], "ATCG"),
+        ([[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]], "ATGC"),
     ],
 )
 def test_one_hot_sequence_to_nucleotide_str(
@@ -278,7 +312,7 @@ def test_extract_deepcpg_experiment_to_qcpg(
 
 
 @pytest.mark.parametrize(
-    ("encoding_array", "include_zero", "expected_integer"),
+    ("encoding_array", "allow_N", "expected_integer"),
     [
         ([0], False, None),
         ([0], True, 0),
@@ -293,20 +327,16 @@ def test_extract_deepcpg_experiment_to_qcpg(
     ],
 )
 def test_one_hot_to_integer(
-    encoding_array: list[int], include_zero: bool, expected_integer: int
+    encoding_array: list[int], allow_N: bool, expected_integer: int
 ) -> None:
-    if expected_integer is None and not include_zero:
+    if expected_integer is None and not allow_N:
         with pytest.raises(
             ValueError, match=r"Improper one-hot encoding for array"
         ):
-            converters._one_hot_to_integer(
-                encoding_array, include_zero=include_zero
-            )
+            converters._one_hot_to_integer(encoding_array, allow_N=allow_N)
     else:
         assert (
-            converters._one_hot_to_integer(
-                encoding_array, include_zero=include_zero
-            )
+            converters._one_hot_to_integer(encoding_array, allow_N=allow_N)
             == expected_integer
         )
 
@@ -334,7 +364,7 @@ def test_h5_one_hot_to_integer() -> None:
     with TemporaryDirectory() as temp_dir:
         temp_path = Path(temp_dir)
         converters.h5_one_hot_to_integer(
-            one_hot_filepath, temp_path, include_zero=True
+            one_hot_filepath, temp_path, allow_N=True
         )
         with File(temp_path / one_hot_filepath.name) as dataset:
             assert set(dataset.keys()) == {

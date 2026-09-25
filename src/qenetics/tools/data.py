@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
-from io import TextIOBase
+from collections.abc import Collection, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +25,20 @@ TOKEN_ENCODING_STR: str = "token"
 ONEHOT_ENCODING_STR: str = "onehot"
 BPE_ENCODING_STR: str = "bpe"
 H5_STR: str = "h5"
+POSITIONS_KEY: str = "positions"
+SEQUENCE_BATCH_SIZE: int = 4096
+H5_CHUNK_SAMPLES: int = 64
+
+# One-hot encodings indexed by ASCII code. Unknown nucleotides encode as zeros.
+_ONE_HOT_NUCLEOTIDES: NDArray[np.int8] = np.zeros(
+    (256, converters.UNIQUE_NUCLEOTIDE_QUANTITY), dtype=np.int8
+)
+_KNOWN_NUCLEOTIDES: NDArray[np.bool_] = np.zeros(256, dtype=bool)
+for _nucleotide in "ATCG":
+    _ONE_HOT_NUCLEOTIDES[ord(_nucleotide)] = (
+        converters.nucleotide_character_to_numpy(_nucleotide)
+    )
+    _KNOWN_NUCLEOTIDES[ord(_nucleotide)] = True
 
 
 class QuantumTorchDataset(Dataset):
@@ -872,125 +885,422 @@ def _increment_or_create_entry(dictionary: dict[Any, ...], key: Any) -> None:
         dictionary[key] += 1
 
 
-def _validate_sequence(sequence: str) -> bool:
-    middle_index: int = int(len(sequence) / 2) - 1
-    return not (
-        sequence[middle_index : middle_index + 2] != "CG" or "N" in sequence
-    )
+def _find_methylation_filepaths(
+    methylation_directory: Path, excluded_experiments: Collection[str] = ()
+) -> dict[str, Path]:
+    """
+    Find the methylation profile file of each experiment in a directory.
 
+    Args
+    ----
+    methylation_directory: The directory of methylation profile files, one
+        file per experiment (cell).
+    excluded_experiments: The names of experiments to leave out, e.g. cells
+        RSC27_4, RSC27_7 and Ca26.
 
-def _retrieve_chromosome_sequences(
-    profiles_by_position: dict[int, dict[str, float]],
-    chromosome: str,
-    fasta_file_descriptor: TextIOBase,
-    fasta_metadata,
-    fasta_line_length: int,
-    sequence_length: int,
-    experiment_names: list[str],
-) -> tuple[NDArray[bool], NDArray[float]]:
-    sequences = np.ndarray(
-        (0, sequence_length, converters.UNIQUE_NUCLEOTIDE_QUANTITY), dtype=int
-    )
-    experiment_mapping: dict[str, int] = {
-        experiment_name: index
-        for index, experiment_name in enumerate(experiment_names)
-    }
-    methylation_ratios = np.ndarray((0, len(experiment_names)))
-    for position, profile_by_experiment in profiles_by_position.items():
-        sequence: str | None = dna.find_methylation_sequence(
-            chromosome=chromosome,
-            position=position,
-            genome_metadata=fasta_metadata,
-            file_descriptor=fasta_file_descriptor,
-            sequence_length=sequence_length,
-            line_length=fasta_line_length,
-        )
-        if sequence is None or not _validate_sequence(sequence):
-            continue
-        else:
-            sequences = np.append(
-                sequences,
-                converters.nucleotide_string_to_numpy(sequence).reshape(
-                    1, sequence_length, converters.UNIQUE_NUCLEOTIDE_QUANTITY
-                ),
-                axis=0,
+    Returns
+    -------
+    The filepath of each experiment, indexed by experiment name and sorted by
+    name.
+
+    Raises
+    ------
+    ValueError if two files share an experiment name.
+    """
+    filepaths_by_experiment: dict[str, Path] = {}
+    for filepath in sorted(methylation_directory.iterdir()):
+        experiment_name: str = filepath.name.split(".")[0]
+        if experiment_name in filepaths_by_experiment:
+            raise ValueError(
+                f"Files {filepaths_by_experiment[experiment_name]} and "
+                f"{filepath} share the experiment name {experiment_name}"
             )
+        filepaths_by_experiment[experiment_name] = filepath
 
-        ratios_by_experiment: np.ndarray = np.array(
-            [np.nan] * len(experiment_names)
-        ).reshape(1, len(experiment_names))
-        for experiment_name, methylation_ratio in profile_by_experiment.items():
-            ratios_by_experiment[0][experiment_mapping[experiment_name]] = (
-                methylation_ratio
-            )
-
-        methylation_ratios = np.append(
-            methylation_ratios, ratios_by_experiment, axis=0
-        )
-
-    return sequences, methylation_ratios
-
-
-def _create_h5_dataset(
-    h5_filepath: Path,
-    sequences: NDArray[bool],
-    methylation_ratios: NDArray[float],
-    experiment_names: list[str],
-) -> None:
-    with h5py.File(h5_filepath, "w") as fd:
-        (
-            fd.create_dataset(
-                METHYLATION_SEQUENCES_KEY,
-                data=sequences,
-                dtype="i1",
-                chunks=True,
-            ),
-        )
-        ratios_dataset: h5py.Group = fd.create_group(METHYLATION_RATIOS_KEY)
-        for experiment_index, experiment_name in enumerate(experiment_names):
-            ratios_dataset.create_dataset(
+    for experiment_name in excluded_experiments:
+        if filepaths_by_experiment.pop(experiment_name, None) is None:
+            logger.warning(
+                "Excluded experiment %s not found in %s",
                 experiment_name,
-                shape=(sequences.shape[0],),
-                chunks=True,
-                dtype="f4",
+                methylation_directory,
             )
-            for sample_index, experiment_ratios in enumerate(
-                methylation_ratios
-            ):
-                ratios_dataset[experiment_name][sample_index] = (
-                    experiment_ratios[experiment_index]
+
+    return filepaths_by_experiment
+
+
+def read_methylation_counts(
+    methylation_filepaths: Sequence[Path],
+) -> dict[str, NDArray[np.int64]]:
+    """
+    Read the methylation read counts of every experiment.
+
+    Args
+    ----
+    methylation_filepaths: The methylation profile file of each experiment.
+
+    Returns
+    -------
+    An array for each chromosome in which each row holds the 1-based position,
+    methylated read count, unmethylated read count and experiment index of one
+    methylation call.
+    """
+    counts_by_chromosome: dict[str, list[NDArray[np.int64]]] = {}
+    for experiment_index, filepath in enumerate(methylation_filepaths):
+        logger.info("Reading methylation profiles from %s", filepath)
+        rows_by_chromosome: dict[str, list[tuple[int, int, int]]] = {}
+        for methylation_profile in methylation.retrieve_methylation_data(
+            filepath
+        ):
+            rows_by_chromosome.setdefault(
+                methylation_profile.chromosome, []
+            ).append(
+                (
+                    methylation_profile.position,
+                    methylation_profile.count_methylated,
+                    methylation_profile.count_unmethylated,
+                )
+            )
+
+        for chromosome, rows in rows_by_chromosome.items():
+            counts: NDArray[np.int64] = np.empty((len(rows), 4), dtype=np.int64)
+            counts[:, :3] = rows
+            counts[:, 3] = experiment_index
+            counts_by_chromosome.setdefault(chromosome, []).append(counts)
+
+    return {
+        chromosome: np.concatenate(counts)
+        for chromosome, counts in counts_by_chromosome.items()
+    }
+
+
+def locate_cpg_sites(
+    reference: NDArray[np.uint8], positions: NDArray[np.int64]
+) -> NDArray[np.int64]:
+    """
+    Find the CpG site each methylation call belongs to.
+
+    Calls on the forward strand are positioned at the C of the CpG, while calls
+    on the reverse strand are positioned at the G. Both are assigned to the
+    CpG's forward-strand C.
+
+    Args
+    ----
+    reference: The ASCII nucleotides of the chromosome.
+    positions: The 1-based positions of the methylation calls.
+
+    Returns
+    -------
+    The 0-based index of the C of each call's CpG in the reference, or -1 if
+    the call is not at a CpG in the reference.
+    """
+    cytosine, guanine = ord("C"), ord("G")
+    indices: NDArray[np.int64] = positions.astype(np.int64) - 1
+    last_index: int = len(reference) - 1
+    in_bounds: NDArray[np.bool_] = (indices >= 0) & (indices <= last_index)
+    nucleotides = reference[np.clip(indices, 0, last_index)]
+    next_nucleotides = reference[np.clip(indices + 1, 0, last_index)]
+    previous_nucleotides = reference[np.clip(indices - 1, 0, last_index)]
+
+    is_cytosine: NDArray[np.bool_] = (
+        in_bounds
+        & (indices < last_index)
+        & (nucleotides == cytosine)
+        & (next_nucleotides == guanine)
+    )
+    is_guanine: NDArray[np.bool_] = (
+        in_bounds
+        & (indices > 0)
+        & (nucleotides == guanine)
+        & (previous_nucleotides == cytosine)
+    )
+
+    return np.where(is_cytosine, indices, np.where(is_guanine, indices - 1, -1))
+
+
+def aggregate_cpg_counts(
+    cpg_indices: NDArray[np.int64],
+    counts: NDArray[np.int64],
+    experiment_quantity: int,
+    minimum_reads: int = 1,
+    binarize: bool = True,
+) -> tuple[NDArray[np.int64], NDArray[np.float32]]:
+    """
+    Combine the read counts of each CpG site and experiment into labels.
+
+    Read counts of both strands of a CpG site are summed before filtering and
+    labeling. Binary labels mark a site as methylated if it has more
+    methylated than unmethylated reads, and unmethylated otherwise.
+
+    Args
+    ----
+    cpg_indices: The 0-based index of the C of each call's CpG site.
+    counts: The read counts of each call, as returned by
+        `read_methylation_counts`.
+    experiment_quantity: The quantity of experiments.
+    minimum_reads: The minimum reads of a site in an experiment to be labeled.
+    binarize: Label sites with binary methylation states if True. Otherwise,
+        label sites with methylation ratios.
+
+    Returns
+    -------
+    The sorted 0-based indices of the CpG sites and a label for each site and
+    experiment. Sites not covered in an experiment are labeled NaN.
+    """
+    keys: NDArray[np.int64] = cpg_indices * experiment_quantity + counts[:, 3]
+    unique_keys, key_indices = np.unique(keys, return_inverse=True)
+    counts_methylated = np.bincount(
+        key_indices, weights=counts[:, 1], minlength=len(unique_keys)
+    )
+    counts_unmethylated = np.bincount(
+        key_indices, weights=counts[:, 2], minlength=len(unique_keys)
+    )
+    counts_total = counts_methylated + counts_unmethylated
+
+    is_covered: NDArray[np.bool_] = counts_total >= minimum_reads
+    unique_keys = unique_keys[is_covered]
+    counts_methylated = counts_methylated[is_covered]
+    counts_unmethylated = counts_unmethylated[is_covered]
+    counts_total = counts_total[is_covered]
+
+    if binarize:
+        values = (counts_methylated > counts_unmethylated).astype(np.float32)
+    else:
+        values = (counts_methylated / counts_total).astype(np.float32)
+
+    site_indices, experiment_indices = np.divmod(
+        unique_keys, experiment_quantity
+    )
+    sites, label_rows = np.unique(site_indices, return_inverse=True)
+    labels: NDArray[np.float32] = np.full(
+        (len(sites), experiment_quantity), np.nan, dtype=np.float32
+    )
+    labels[label_rows, experiment_indices] = values
+
+    return sites, labels
+
+
+def window_starts(
+    sites: NDArray[np.int64], sequence_length: int
+) -> NDArray[np.int64]:
+    """
+    Find the start of the sequence window centered on each CpG site.
+
+    For odd sequence lengths, the C of the CpG is the center nucleotide.
+    For even sequence lengths, the CpG dinucleotide is the center pair.
+
+    Args
+    ----
+    sites: The 0-based indices of the C of each CpG site.
+    sequence_length: The length of the windows.
+
+    Returns
+    -------
+    The 0-based index of the first nucleotide of each window.
+    """
+    return sites - (sequence_length - 1) // 2
+
+
+def windows_in_bounds(
+    sites: NDArray[np.int64], sequence_length: int, reference_length: int
+) -> NDArray[np.bool_]:
+    """
+    Check whether the sequence window of each CpG site fits in the reference.
+
+    Args
+    ----
+    sites: The 0-based indices of the C of each CpG site.
+    sequence_length: The length of the windows.
+    reference_length: The length of the chromosome.
+
+    Returns
+    -------
+    True for each site whose window lies within the chromosome.
+    """
+    starts: NDArray[np.int64] = window_starts(sites, sequence_length)
+    return (starts >= 0) & (starts + sequence_length <= reference_length)
+
+
+def windows_are_known(
+    reference: NDArray[np.uint8],
+    sites: NDArray[np.int64],
+    sequence_length: int,
+) -> NDArray[np.bool_]:
+    """
+    Check whether the sequence window of each CpG site holds only A, T, C, G.
+
+    Args
+    ----
+    reference: The ASCII nucleotides of the chromosome.
+    sites: The 0-based indices of the C of each CpG site, whose windows must
+        lie within the chromosome.
+    sequence_length: The length of the windows.
+
+    Returns
+    -------
+    True for each site whose window holds no unknown nucleotides.
+    """
+    starts: NDArray[np.int64] = window_starts(sites, sequence_length)
+    window_offsets: NDArray[np.int64] = np.arange(sequence_length)
+    are_known: NDArray[np.bool_] = np.empty(len(sites), dtype=bool)
+    for batch_start in range(0, len(sites), SEQUENCE_BATCH_SIZE):
+        batch = slice(batch_start, batch_start + SEQUENCE_BATCH_SIZE)
+        windows: NDArray[np.uint8] = reference[
+            starts[batch, np.newaxis] + window_offsets
+        ]
+        are_known[batch] = _KNOWN_NUCLEOTIDES[windows].all(axis=1)
+
+    return are_known
+
+
+def read_reference(
+    fasta_filepath: Path, sequence_info: dna.SequenceInfo, line_length: int
+) -> NDArray[np.uint8]:
+    """
+    Read a chromosome of the reference genome as an array of ASCII codes.
+
+    Args
+    ----
+    fasta_filepath: The FASTA file of the reference genome.
+    sequence_info: The metadata of the chromosome.
+    line_length: The length of a line of nucleotide data in the FASTA file.
+
+    Returns
+    -------
+    The upper-cased ASCII nucleotides of the chromosome.
+    """
+    return np.frombuffer(
+        dna.read_chromosome(fasta_filepath, sequence_info, line_length),
+        dtype=np.uint8,
+    )
+
+
+def _create_resizable_dataset(
+    group: h5py.Group, name: str, sample_shape: tuple[int, ...], dtype: str
+) -> h5py.Dataset:
+    """
+    Create an empty H5 dataset that grows along its first axis.
+
+    Args
+    ----
+    group: The file or group in which to create the dataset.
+    name: The name of the dataset.
+    sample_shape: The shape of one sample.
+    dtype: The data type of the dataset.
+
+    Returns
+    -------
+    The created dataset.
+    """
+    return group.create_dataset(
+        name,
+        shape=(0, *sample_shape),
+        maxshape=(None, *sample_shape),
+        chunks=(H5_CHUNK_SAMPLES, *sample_shape),
+        dtype=dtype,
+        compression="gzip",
+    )
+
+
+def _append_to_dataset(dataset: h5py.Dataset, samples: NDArray) -> None:
+    """
+    Append samples to a resizable H5 dataset.
+
+    Args
+    ----
+    dataset: The resizable dataset.
+    samples: The samples to append.
+    """
+    if len(samples) == 0:
+        return
+
+    previous_length: int = dataset.shape[0]
+    dataset.resize(previous_length + len(samples), axis=0)
+    dataset[previous_length:] = samples
+
+
+def _write_chromosome_h5(
+    h5_filepath: Path,
+    reference: NDArray[np.uint8],
+    sites: NDArray[np.int64],
+    labels: NDArray[np.float32],
+    experiment_names: Sequence[str],
+    sequence_length: int,
+    *,
+    allow_N: bool = False,
+) -> int:
+    """
+    Write the one-hot encoded sequence windows and labels of a chromosome.
+
+    Args
+    ----
+    h5_filepath: The H5 file to write.
+    reference: The ASCII nucleotides of the chromosome.
+    sites: The sorted 0-based indices of the C of each CpG site.
+    labels: The label of each site in each experiment.
+    experiment_names: The name of each experiment.
+    sequence_length: The length of the sequence windows.
+    allow_N: Keep windows holding nucleotides other than A, T, C and G, which
+        are encoded as all zeros, if True. Otherwise, drop them.
+
+    Returns
+    -------
+    The quantity of samples written.
+    """
+    in_bounds: NDArray[np.bool_] = windows_in_bounds(
+        sites, sequence_length, len(reference)
+    )
+    if not in_bounds.all():
+        logger.info(
+            "Dropping %d sites whose windows exceed the bounds of %s",
+            np.count_nonzero(~in_bounds),
+            h5_filepath.stem,
+        )
+    sites, labels = sites[in_bounds], labels[in_bounds]
+
+    if not allow_N:
+        are_known: NDArray[np.bool_] = windows_are_known(
+            reference, sites, sequence_length
+        )
+        if not are_known.all():
+            logger.info(
+                "Dropping %d sites whose windows hold unknown nucleotides in "
+                "%s",
+                np.count_nonzero(~are_known),
+                h5_filepath.stem,
+            )
+        sites, labels = sites[are_known], labels[are_known]
+
+    starts: NDArray[np.int64] = window_starts(sites, sequence_length)
+    window_offsets: NDArray[np.int64] = np.arange(sequence_length)
+    with h5py.File(h5_filepath, "w") as fd:
+        sequences_dataset: h5py.Dataset = _create_resizable_dataset(
+            fd,
+            METHYLATION_SEQUENCES_KEY,
+            (sequence_length, converters.UNIQUE_NUCLEOTIDE_QUANTITY),
+            "i1",
+        )
+        positions_dataset: h5py.Dataset = _create_resizable_dataset(
+            fd, POSITIONS_KEY, (), "i8"
+        )
+        ratios_group: h5py.Group = fd.create_group(METHYLATION_RATIOS_KEY)
+        ratios_datasets: list[h5py.Dataset] = [
+            _create_resizable_dataset(ratios_group, experiment_name, (), "f4")
+            for experiment_name in experiment_names
+        ]
+
+        for batch_start in range(0, len(sites), SEQUENCE_BATCH_SIZE):
+            batch = slice(batch_start, batch_start + SEQUENCE_BATCH_SIZE)
+            windows: NDArray[np.uint8] = reference[
+                starts[batch, np.newaxis] + window_offsets
+            ]
+            _append_to_dataset(sequences_dataset, _ONE_HOT_NUCLEOTIDES[windows])
+            _append_to_dataset(positions_dataset, sites[batch] + 1)
+            for experiment_index, ratios_dataset in enumerate(ratios_datasets):
+                _append_to_dataset(
+                    ratios_dataset, labels[batch, experiment_index]
                 )
 
-
-def _create_h5_files(
-    profiles_by_chromosome: dict[str, dict[int, dict[str, float]]],
-    experiment_names: list[str],
-    dataset_directory: Path,
-    fasta_filepath: Path,
-    sequence_length: int,
-) -> None:
-    fasta_line_length: int = dna.determine_line_length(fasta_filepath)
-    with open(fasta_filepath) as fasta_fd:
-        fasta_metadata: dict[str, dna.SequenceInfo] = (
-            dna.extract_fasta_metadata(fasta_filepath)
-        )
-        for chromosome, profiles_by_position in profiles_by_chromosome.items():
-            h5_filepath: Path = dataset_directory / ("chr" + chromosome + ".h5")
-            sequences, methylation_ratios = _retrieve_chromosome_sequences(
-                profiles_by_position=profiles_by_position,
-                chromosome=chromosome,
-                fasta_file_descriptor=fasta_fd,
-                fasta_metadata=fasta_metadata,
-                fasta_line_length=fasta_line_length,
-                sequence_length=sequence_length,
-                experiment_names=experiment_names,
-            )
-            _create_h5_dataset(
-                h5_filepath=h5_filepath,
-                sequences=sequences,
-                methylation_ratios=methylation_ratios,
-                experiment_names=experiment_names,
-            )
+    return len(sites)
 
 
 def create_h5_dataset_from_methylation_profiles(
@@ -999,23 +1309,104 @@ def create_h5_dataset_from_methylation_profiles(
     dataset_directory: Path,
     sequence_length: int,
     minimum_samples: int = 1,
+    *,
+    excluded_experiments: Collection[str] = (),
+    binarize: bool = True,
+    allow_N: bool = False,
 ) -> None:
-    experiment_names: list[str] = [
-        filename.stem.split(".")[0]
-        for filename in methylation_directory.iterdir()
-    ]
-    profiles_by_chromosome: dict[str, dict[int, dict[str, float]]] = (
-        methylation.record_methylation_profiles(
-            methylation_directory, minimum_samples
+    """
+    Create one H5 file of labeled CpG sequence windows per chromosome.
+
+    Each window is centered on a CpG site and includes it. Calls on either
+    strand of a CpG site are combined, and sites are labeled methylated if
+    they have more methylated than unmethylated reads. Each file holds the
+    one-hot encoded windows, the 1-based position of each site's C, and the
+    labels of each experiment, with NaN for sites not covered in an experiment.
+
+    The reference genome must be the assembly that the methylation calls are
+    positioned in, e.g. GRCm38 for scBS-seq and GRCh38 or GRCm38 for lifted
+    scRRBS-seq calls.
+
+    Args
+    ----
+    methylation_directory: The directory of methylation profile files, one
+        file per experiment (cell), with 1-based positions.
+    fasta_filepath: The Ensembl FASTA file of the reference genome.
+    dataset_directory: The directory in which to write the H5 files.
+    sequence_length: The length of the sequence windows, e.g. 1001.
+    minimum_samples: The minimum reads of a site in an experiment, summed over
+        both strands, to be labeled, e.g. 4 for scRRBS-seq.
+    excluded_experiments: The names of experiments to leave out.
+    binarize: Label sites with binary methylation states if True. Otherwise,
+        label sites with methylation ratios.
+    allow_N: Keep windows holding nucleotides other than A, T, C and G if
+        True. Otherwise, drop them.
+    """
+    filepaths_by_experiment: dict[str, Path] = _find_methylation_filepaths(
+        methylation_directory, excluded_experiments
+    )
+    experiment_names: list[str] = list(filepaths_by_experiment)
+    counts_by_chromosome: dict[str, NDArray[np.int64]] = (
+        read_methylation_counts(list(filepaths_by_experiment.values()))
+    )
+
+    fasta_line_length: int = dna.determine_line_length(fasta_filepath)
+    fasta_metadata: dict[str, dna.SequenceInfo] = dna.extract_fasta_metadata(
+        fasta_filepath
+    )
+    for chromosome in sorted(counts_by_chromosome):
+        counts: NDArray[np.int64] = counts_by_chromosome[chromosome]
+        if chromosome not in fasta_metadata:
+            logger.warning(
+                "Skipping %d methylation calls on chromosome %s, which is not "
+                "in %s",
+                len(counts),
+                chromosome,
+                fasta_filepath,
+            )
+            continue
+
+        reference: NDArray[np.uint8] = read_reference(
+            fasta_filepath, fasta_metadata[chromosome], fasta_line_length
         )
-    )
-    _create_h5_files(
-        profiles_by_chromosome=profiles_by_chromosome,
-        experiment_names=experiment_names,
-        dataset_directory=dataset_directory,
-        fasta_filepath=fasta_filepath,
-        sequence_length=sequence_length,
-    )
+        cpg_indices: NDArray[np.int64] = locate_cpg_sites(
+            reference, counts[:, 0]
+        )
+        is_cpg: NDArray[np.bool_] = cpg_indices >= 0
+        if not is_cpg.all():
+            logger.warning(
+                "%d of %d methylation calls on chromosome %s are not at a CpG "
+                "site of %s. Check that the calls are 1-based and positioned "
+                "in the same assembly as the reference genome.",
+                np.count_nonzero(~is_cpg),
+                len(counts),
+                chromosome,
+                fasta_filepath,
+            )
+
+        sites, labels = aggregate_cpg_counts(
+            cpg_indices[is_cpg],
+            counts[is_cpg],
+            len(experiment_names),
+            minimum_reads=minimum_samples,
+            binarize=binarize,
+        )
+        if len(sites) == 0:
+            logger.warning("No CpG sites found on chromosome %s", chromosome)
+            continue
+
+        samples_written: int = _write_chromosome_h5(
+            dataset_directory / f"chr{chromosome}.h5",
+            reference,
+            sites,
+            labels,
+            experiment_names,
+            sequence_length,
+            allow_N=allow_N,
+        )
+        logger.info(
+            "Wrote %d samples for chromosome %s", samples_written, chromosome
+        )
 
 
 def _find_bounds(original_length: int, new_length: int) -> tuple[int, int]:

@@ -1,7 +1,12 @@
+import gzip
+import logging
 from collections.abc import Generator
 from dataclasses import dataclass
 from enum import IntEnum
+from io import TextIOBase
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 
 class MethylationFormat(IntEnum):
@@ -39,6 +44,42 @@ class MethylationInfo:
     trinucleotide_context: str = ""
 
 
+def normalize_chromosome(chromosome: str) -> str:
+    """
+    Convert a chromosome name to the Ensembl naming convention.
+
+    UCSC-style names such as 'chr1' and 'chrM' become '1' and 'MT', matching
+    the sequence names of Ensembl FASTA files.
+
+    Args
+    ----
+    chromosome: The chromosome name.
+
+    Returns
+    -------
+    The Ensembl chromosome name.
+    """
+    if chromosome.lower().startswith("chr"):
+        chromosome = chromosome[3:]
+
+    return "MT" if chromosome == "M" else chromosome
+
+
+def _is_data_line(line_split: list[str]) -> bool:
+    """
+    Check whether a split line holds data rather than a header or blank line.
+
+    Args
+    ----
+    line_split: The whitespace-split line.
+
+    Returns
+    -------
+    True if the line has a numeric position column. False otherwise.
+    """
+    return len(line_split) > 1 and line_split[1].isdigit()
+
+
 def _process_cov_methylation_line(
     line: str, minimum_samples: int = 1
 ) -> MethylationInfo | None:
@@ -55,16 +96,20 @@ def _process_cov_methylation_line(
     The CpG methylation experiment results.
     """
     line_split: list[str] = line.rstrip().split()
+    if not _is_data_line(line_split):
+        return None
 
     count_methylated = int(line_split[4])
     count_unmethylated = int(line_split[5])
     total_experiments: int = count_methylated + count_unmethylated
+    if total_experiments == 0:
+        raise ValueError(f"Experiment count is zero for line: {line!r}")
 
     if total_experiments < minimum_samples:
         return None
 
     return MethylationInfo(
-        chromosome=line_split[0],
+        chromosome=normalize_chromosome(line_split[0]),
         position=int(line_split[1]),
         methylation_ratio=count_methylated / total_experiments,
         experiment_count=total_experiments,
@@ -89,20 +134,23 @@ def _process_cpg_methylation_line(
     The CpG methylation experiment results.
     """
     line_split: list[str] = line.rstrip().split()
+    if not _is_data_line(line_split):
+        return None
+
     total_experiments = int(line_split[4])
     if total_experiments < minimum_samples:
         return None
 
     return MethylationInfo(
-        chromosome=line_split[0][3:],
+        chromosome=normalize_chromosome(line_split[0]),
         position=int(line_split[1]),
         methylation_ratio=float(line_split[7]),
         experiment_count=total_experiments,
         count_methylated=int(line_split[5]),
         count_unmethylated=int(line_split[6]),
-        c_context=line[2],
-        strand=line[3],
-        trinucleotide_context=line[8],
+        c_context=line_split[2],
+        strand=line_split[3],
+        trinucleotide_context=line_split[8],
     )
 
 
@@ -110,12 +158,18 @@ def _process_deepcpg_methylation_line(
     line: str, minimum_count: int = 1
 ) -> MethylationInfo | None:
     line_split: list[str] = line.rstrip().split()
+    if not _is_data_line(line_split):
+        return None
+
     experiment_count: int = int(line_split[3])
+    if experiment_count == 0:
+        raise ValueError(f"Experiment count is zero for line: {line!r}")
+
     if experiment_count < minimum_count:
         return None
 
     return MethylationInfo(
-        chromosome=line_split[0][3:],
+        chromosome=normalize_chromosome(line_split[0]),
         position=int(line_split[1]),
         methylation_ratio=float(line_split[2]),
         experiment_count=experiment_count,
@@ -150,6 +204,25 @@ def process_methylation_line(
         return _process_deepcpg_methylation_line(line, minimum_samples)
 
 
+def open_methylation_file(methylation_filepath: Path) -> TextIOBase:
+    """
+    Open a methylation file for reading text, decompressing it if gzipped.
+
+    Args
+    ----
+    methylation_filepath: The filepath of the methylation profiles. Files
+        ending in '.gz' are read as gzip-compressed.
+
+    Returns
+    -------
+    A text file descriptor open for reading.
+    """
+    if methylation_filepath.suffix == ".gz":
+        return gzip.open(methylation_filepath, "rt")
+
+    return methylation_filepath.open()
+
+
 def determine_format(methylation_filepath: Path) -> MethylationFormat:
     """
     Determine the format of the methylation file based on the filename.
@@ -162,11 +235,12 @@ def determine_format(methylation_filepath: Path) -> MethylationFormat:
     -------
     The format of the methylation file.
     """
-    if "cov" in methylation_filepath.name:
+    filename: str = methylation_filepath.name.lower()
+    if "cov" in filename:
         return MethylationFormat.COV
-    if "cpg" in methylation_filepath.name:
+    if "cpg" in filename:
         return MethylationFormat.CPG
-    if "tsv" in methylation_filepath.name:
+    if "tsv" in filename:
         return MethylationFormat.DEEPCPG
     else:
         raise ValueError(
@@ -189,7 +263,8 @@ def retrieve_methylation_data(
     Generator for MethylationInfo objects from the methylation file.
     """
     data_format: MethylationFormat = determine_format(methylation_filepath)
-    with open(methylation_filepath) as fd:
+    lines_read: int = 0
+    with open_methylation_file(methylation_filepath) as fd:
         for line in fd:
             methylation_information: MethylationInfo | None = (
                 process_methylation_line(line, data_format, minimum_samples)
@@ -197,7 +272,13 @@ def retrieve_methylation_data(
             if not methylation_information:
                 continue
 
+            lines_read += 1
             yield methylation_information
+
+    if lines_read == 0:
+        logger.warning(
+            "No methylation profiles read from %s", methylation_filepath
+        )
 
 
 def _cov_methylation_line(methylation_profile: MethylationInfo) -> str:
@@ -290,7 +371,7 @@ def convert_methylation_profiles(
         output_filepath = output_directory / (input_filepath.stem + suffix)
 
     with (
-        open(input_filepath) as input_fd,
+        open_methylation_file(input_filepath) as input_fd,
         open(output_filepath, "w") as output_fd,
     ):
         for line in input_fd:

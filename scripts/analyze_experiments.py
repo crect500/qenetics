@@ -34,7 +34,8 @@ def _parse_script_args() -> Namespace:
         dest="sequence_length",
         type=int,
         required=True,
-        help="The length of sequence surrounding the CpG site to extract.",
+        help="The length of the window of nucleotides centered on and "
+        "including each CpG site, e.g. 1001.",
     )
     parser.add_argument(
         "-o",
@@ -51,8 +52,8 @@ def _parse_script_args() -> Namespace:
         type=int,
         required=True,
         default=1,
-        help="The minimum number of samples to consider a methylation "
-        "profile CpG site.",
+        help="The minimum reads of a CpG site, summed over both strands, "
+        "for the site to be considered valid, e.g. 4 for scRRBS-seq.",
     )
 
     return parser.parse_args()

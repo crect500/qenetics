@@ -301,6 +301,35 @@ def _non_nan_indices(truth: Tensor) -> list[int]:
     return indices
 
 
+def _observed_loss(outputs: Tensor, labels: Tensor) -> Tensor | None:
+    """
+    Compute the binary cross-entropy over the observed labels only.
+
+    Labels of sites not covered in an experiment, stored as NaN, are left
+    out of the loss.
+
+    Args
+    ----
+    outputs: The predicted methylation probabilities.
+    labels: The methylation labels, with NaN for unobserved labels.
+
+    Returns
+    -------
+    The mean binary cross-entropy of the observed labels, or None if no
+    labels are observed.
+    """
+    if len(labels.shape) == 1 and len(outputs.shape) > 1:
+        outputs = outputs.squeeze(1)
+
+    is_observed: Tensor = ~labels.isnan()
+    if not is_observed.any():
+        return None
+
+    return nn.functional.binary_cross_entropy(
+        outputs[is_observed], labels[is_observed]
+    )
+
+
 def _prepare_training(
     training_parameters: TrainingParameters, rank: int | None = None
 ) -> tuple[
@@ -418,14 +447,9 @@ def _train_one_epoch(
             labels = labels.to(rank)
         optimizer.zero_grad()
         outputs: Tensor = model(inputs)
-        if len(labels.shape) > 1:
-            loss: Tensor = nn.functional.binary_cross_entropy(outputs, labels)
-        elif len(outputs.shape) > 1:
-            loss = nn.functional.binary_cross_entropy(
-                outputs.squeeze(1), labels
-            )
-        else:
-            loss = nn.functional.binary_cross_entropy(outputs, labels)
+        loss: Tensor | None = _observed_loss(outputs, labels)
+        if loss is None:
+            continue
 
         if training_parameters.l1_regularizer != 0.0:
             loss += training_parameters.l1_regularizer * sum(
@@ -468,30 +492,26 @@ def _evaluate_validation_set(
     rank: int | None = None,
 ) -> tuple[float, float]:
     accumulated_loss: float = 0.0
+    loss_batches: int = 0
     model.eval()
     all_outputs: list[Tensor] = []
     all_labels: list[Tensor] = []
     with torch.no_grad():
-        for batch_index, validation_data in enumerate(validation_loader):
+        for validation_data in validation_loader:
             inputs, labels = validation_data
             if rank is not None:
                 inputs = inputs.to(rank)
                 labels = labels.to(rank)
             outputs: Tensor = model(inputs)
 
-            all_outputs.append(outputs.detach().cpu().flatten())
-            all_labels.append(labels.detach().cpu().flatten())
+            flat_labels: Tensor = labels.detach().cpu().flatten()
+            is_observed: Tensor = ~flat_labels.isnan()
+            all_outputs.append(outputs.detach().cpu().flatten()[is_observed])
+            all_labels.append(flat_labels[is_observed])
 
-            if len(labels.shape) > 1:
-                loss: Tensor = nn.functional.binary_cross_entropy(
-                    outputs, labels
-                )
-            elif len(outputs.shape) > 1:
-                loss = nn.functional.binary_cross_entropy(
-                    outputs.squeeze(1), labels
-                )
-            else:
-                loss = nn.functional.binary_cross_entropy(outputs, labels)
+            loss: Tensor | None = _observed_loss(outputs, labels)
+            if loss is None:
+                continue
 
             if training_parameters.l1_regularizer != 0.0:
                 loss += training_parameters.l1_regularizer * sum(
@@ -506,9 +526,14 @@ def _evaluate_validation_set(
                 )
 
             accumulated_loss += loss
+            loss_batches += 1
 
     scores: Tensor = torch.cat(all_outputs)
     truth: Tensor = torch.cat(all_labels)
+    if loss_batches == 0:
+        logger.warning("Validation set has no observed labels.")
+        return float("nan"), float("nan")
+
     if truth.min() == truth.max():
         logger.warning(
             "Validation set is single-class; AUC is undefined for this epoch."
@@ -517,7 +542,7 @@ def _evaluate_validation_set(
     else:
         validation_auc = roc_auc_score(truth.numpy(), scores.numpy())
 
-    return accumulated_loss / (batch_index + 1), validation_auc
+    return accumulated_loss / loss_batches, validation_auc
 
 
 def _train_all_epochs(

@@ -13,18 +13,18 @@ class TenGenomicsSequenceInfo:
 
 class Nucleotide(IntEnum):
     """
-    Maps nucleotide abbreviations to enum.
+    Maps nucleotide abbreviations to enum, following the DeepCpG encoding.
 
     A - 0
     T - 1
-    C - 2
-    G - 3
+    G - 2
+    C - 3
     """
 
     A = 0
     T = 1
-    C = 2
-    G = 3
+    G = 2
+    C = 3
 
 
 @dataclass
@@ -48,7 +48,7 @@ def convert_nucleotide_to_enum(nucleotide: str) -> Nucleotide:
     """
     Convert nucleotide abbreviation to corresponding enum.
 
-    A - 0, T - 1, C - 2, G - 3
+    A - 0, T - 1, G - 2, C - 3
 
     Args
     ----
@@ -244,16 +244,29 @@ def determine_line_length(fasta_file: Path) -> int:
         return len(fd.readline()) - 1
 
 
-def extract_fasta_metadata(
-    fasta_file: Path, crlf: bool = False
-) -> dict[str, SequenceInfo]:
+def is_crlf(fasta_file: Path) -> bool:
+    """
+    Determine whether a FASTA file uses CRLF line endings.
+
+    Args
+    ----
+    fasta_file: The filepath of a FASTA file.
+
+    Returns
+    -------
+    True if the first line ends in CRLF. False otherwise.
+    """
+    with fasta_file.open("rb") as fd:
+        return fd.readline().endswith(b"\r\n")
+
+
+def extract_fasta_metadata(fasta_file: Path) -> dict[str, SequenceInfo]:
     """
     Extract all metadata from FAFSA comment lines.
 
     Args
     ----
     fasta_file: The filepath of a valid FAFSA file.
-    crlf: Set to true if ASCII file is CRLF.
 
     Returns
     -------
@@ -262,6 +275,7 @@ def extract_fasta_metadata(
     annotations: dict[str, SequenceInfo] = {}
 
     line_length: int = determine_line_length(fasta_file)
+    newline_width: int = 2 if is_crlf(fasta_file) else 1
 
     read_position: int = 0
     with fasta_file.open() as fd:
@@ -270,18 +284,52 @@ def extract_fasta_metadata(
             sequence_info.file_position = fd.tell()
             if sequence_info.is_chromosome:
                 annotations[chromosome] = sequence_info
-            newline_quantity = int(sequence_info.length / line_length)
-            if crlf:
-                newline_quantity *= 2
-            if sequence_info.length % line_length != 0:
-                newline_quantity += 1
+            line_quantity: int = -(-sequence_info.length // line_length)
             read_position = (
                 sequence_info.file_position
                 + sequence_info.length
-                + newline_quantity
+                + line_quantity * newline_width
             )  # Skip newlines
 
     return annotations
+
+
+def read_chromosome(
+    fasta_file: Path, sequence_info: SequenceInfo, line_length: int
+) -> bytes:
+    """
+    Read an entire sequence from a FASTA file.
+
+    Args
+    ----
+    fasta_file: The filepath of the FASTA file.
+    sequence_info: The metadata of the sequence to read.
+    line_length: The length of a line of nucleotide data in the FASTA file.
+
+    Returns
+    -------
+    The upper-cased nucleotides of the sequence without line breaks.
+
+    Raises
+    ------
+    ValueError if the file does not hold a sequence of the annotated length at
+    the annotated position.
+    """
+    line_quantity: int = -(-sequence_info.length // line_length)
+    with fasta_file.open("rb") as fd:
+        fd.seek(sequence_info.file_position)
+        raw_sequence: bytes = fd.read(sequence_info.length + 2 * line_quantity)
+
+    sequence: bytes = raw_sequence.replace(b"\r", b"").replace(b"\n", b"")[
+        : sequence_info.length
+    ]
+    if len(sequence) != sequence_info.length or b">" in sequence:
+        raise ValueError(
+            f"Expected a sequence of length {sequence_info.length} at byte "
+            f"{sequence_info.file_position} of {fasta_file}"
+        )
+
+    return sequence.upper()
 
 
 def _read_sequence(

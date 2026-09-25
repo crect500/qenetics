@@ -50,6 +50,11 @@ def test_qcpg_dataset_directory() -> Path:
 
 
 @pytest.fixture
+def test_single_experiment_dataset_directory() -> Path:
+    return Path("tests/test_files/test_single_experiment_dataset")
+
+
+@pytest.fixture
 def test_single_amplitude_dataset_directory() -> Path:
     return Path("tests/test_files/test_single_amplitude_dataset")
 

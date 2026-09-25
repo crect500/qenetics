@@ -6,7 +6,10 @@ from collections.abc import Generator
 from dataclasses import dataclass
 from pathlib import Path
 
-from qenetics.tools import cpg_sampler
+import numpy as np
+from numpy.typing import NDArray
+
+from qenetics.tools import data, dna
 
 logger = logging.getLogger(__name__)
 
@@ -122,19 +125,17 @@ def write_all_deepcpg_methylations(
     """
     with open(output_file, "w") as fd:
         for methylation_profile in retrieve_methylation_data(
-            methylation_filepath, minimum_samples, threshold
+            methylation_filepath, minimum_samples
         ):
             _write_deepcpg_methylation(fd, methylation_profile, threshold)
 
 
 def _write_sequence_row(
-    file_descriptor: io.TextIOBase,
-    sequence: str,
-    methylation_profile: MethylationInfo,
+    file_descriptor: io.TextIOBase, sequence: str, methylation_ratio: float
 ) -> None:
     file_descriptor.write(sequence)
     file_descriptor.write(",")
-    file_descriptor.write(str(methylation_profile.methylation_ratio))
+    file_descriptor.write(str(methylation_ratio))
     file_descriptor.write("\n")
 
 
@@ -146,28 +147,71 @@ def create_sequence_dataset(
     output_file: Path,
     minimum_samples: int = 1,
 ) -> None:
-    metadata: dict[str, cpg_sampler.SequenceInfo] = (
-        cpg_sampler.extract_fasta_metadata(fasta_file)
+    """
+    Write the sequence window and methylation ratio of each CpG site to a CSV.
+
+    Sites are found as in `data.create_h5_dataset_from_methylation_profiles`:
+    calls on both strands of a CpG site are combined, windows are centered on
+    and include the site, and sites whose windows exceed the chromosome or
+    hold unknown nucleotides are skipped.
+
+    Args
+    ----
+    methylation_filepath: The methylation profile file of one experiment, with
+        1-based positions.
+    fasta_file: The Ensembl FASTA file of the reference genome.
+    sequence_length: The length of the sequence windows.
+    chromosomes: The chromosomes whose sites to write.
+    output_file: The CSV file to write.
+    minimum_samples: The minimum reads of a site, summed over both strands.
+    """
+    metadata: dict[str, dna.SequenceInfo] = dna.extract_fasta_metadata(
+        fasta_file
     )
-    line_length: int = cpg_sampler.determine_line_length(fasta_file)
-    with open(output_file, "w") as output_fd, open(fasta_file) as fasta_fd:
+    line_length: int = dna.determine_line_length(fasta_file)
+    counts_by_chromosome: dict[str, NDArray[np.int64]] = (
+        data.read_methylation_counts([methylation_filepath])
+    )
+    with open(output_file, "w") as output_fd:
         output_fd.write("sequence,ratio_methylated\n")
-        for methylation_profile in retrieve_methylation_data(
-            methylation_filepath, minimum_samples
-        ):
-            if methylation_profile.chromosome in chromosomes:
-                sequence: str | None = cpg_sampler.find_methylation_sequence(
-                    methylation_profile.chromosome,
-                    methylation_profile.position,
-                    metadata,
-                    fasta_fd,
-                    sequence_length,
-                    line_length,
-                )
-                if sequence:
-                    _write_sequence_row(
-                        output_fd, sequence, methylation_profile
-                    )
+        for chromosome in chromosomes:
+            if (
+                chromosome not in counts_by_chromosome
+                or chromosome not in metadata
+            ):
+                continue
+
+            counts: NDArray[np.int64] = counts_by_chromosome[chromosome]
+            reference: NDArray[np.uint8] = data.read_reference(
+                fasta_file, metadata[chromosome], line_length
+            )
+            cpg_indices: NDArray[np.int64] = data.locate_cpg_sites(
+                reference, counts[:, 0]
+            )
+            is_cpg: NDArray[np.bool_] = cpg_indices >= 0
+            sites, ratios = data.aggregate_cpg_counts(
+                cpg_indices[is_cpg],
+                counts[is_cpg],
+                experiment_quantity=1,
+                minimum_reads=minimum_samples,
+                binarize=False,
+            )
+            in_bounds: NDArray[np.bool_] = data.windows_in_bounds(
+                sites, sequence_length, len(reference)
+            )
+            sites, ratios = sites[in_bounds], ratios[in_bounds, 0]
+            are_known: NDArray[np.bool_] = data.windows_are_known(
+                reference, sites, sequence_length
+            )
+            sites, ratios = sites[are_known], ratios[are_known]
+
+            for start, ratio in zip(
+                data.window_starts(sites, sequence_length), ratios, strict=True
+            ):
+                window: NDArray[np.uint8] = reference[
+                    start : start + sequence_length
+                ]
+                _write_sequence_row(output_fd, window.tobytes().decode(), ratio)
 
 
 def create_dataset_from_directory(
@@ -200,4 +244,5 @@ def create_dataset_from_directory(
             chromosomes=validation_chromosomes,
             output_file=output_directory
             / f"validation_{output_file_common_name}.csv",
+            minimum_samples=minimum_samples,
         )

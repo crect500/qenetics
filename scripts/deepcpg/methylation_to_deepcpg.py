@@ -1,7 +1,7 @@
 from argparse import ArgumentParser, Namespace
 from pathlib import Path
 
-from qenetics.tools import deepcpg_utils
+from qenetics.deepcpg import deepcpg_utils
 
 
 def _parse_script_args() -> Namespace:
@@ -49,5 +49,8 @@ if __name__ == "__main__":
         args.methylation_file.stem + f"deepcpg_m{args.minimum_samples}.tsv"
     )
     deepcpg_utils.write_all_deepcpg_methylations(
-        args.methylation_file, output_file, args.threshold
+        args.methylation_file,
+        output_file,
+        minimum_samples=args.minimum_samples,
+        threshold=args.threshold,
     )
