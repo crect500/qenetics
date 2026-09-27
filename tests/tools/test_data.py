@@ -841,6 +841,321 @@ def test_create_h5_dataset_from_methylation_profiles_minimum_reads() -> None:
             )
 
 
+def _deepcpg_codes(sequence: str) -> list[int]:
+    return [
+        data.DEEPCPG_NUCLEOTIDE_CODES[nucleotide] for nucleotide in sequence
+    ]
+
+
+def _write_deepcpg_files(
+    directory: Path,
+    chromosome: str,
+    reference: str,
+    rows: list[tuple[int, dict[str, float]]],
+    experiment_names: list[str],
+    window_length: int,
+    chunk_size: int,
+) -> None:
+    """Write rows of (1-based position, label by experiment) in chunks, as
+    DeepCpG's dcpg_data.py does, with -1 for experiments without a label."""
+    delta: int = window_length // 2
+    for chunk_start in range(0, len(rows), chunk_size):
+        chunk = rows[chunk_start : chunk_start + chunk_size]
+        # Unpadded names, so filename order differs from position order.
+        filepath = directory / (
+            f"c{chromosome}_{chunk_start}-{chunk_start + len(chunk)}.h5"
+        )
+        with h5py.File(filepath, "w") as fd:
+            fd.create_dataset(
+                data.DEEPCPG_CHROMOSOME_KEY,
+                data=np.array([chromosome.encode()] * len(chunk)),
+            )
+            fd.create_dataset(
+                data.DEEPCPG_POSITION_KEY,
+                data=np.array([position for position, _ in chunk], np.int32),
+            )
+            fd.create_dataset(
+                f"{data.INPUTS_STR}/{data.DNA_STR}",
+                data=np.array(
+                    [
+                        _deepcpg_codes(
+                            reference[position - 1 - delta : position + delta]
+                        )
+                        for position, _ in chunk
+                    ],
+                    dtype=np.int8,
+                ),
+            )
+            for experiment_name in experiment_names:
+                fd.create_dataset(
+                    f"{data.DEEPCPG_OUTPUTS_KEY}/{experiment_name}",
+                    data=np.array(
+                        [
+                            labels.get(experiment_name, data.MISSING_LABEL)
+                            for _, labels in chunk
+                        ],
+                        dtype=np.float32,
+                    ),
+                )
+
+
+def test_deepcpg_sites() -> None:
+    windows = ["ATCGA", "TCGAT", "AACAT", "AAGAT", "CGCGA"]
+    rows = data._DeepCpGRows(
+        positions=np.array([10, 11, 20, 30, 40], dtype=np.int64),
+        windows=np.array([_deepcpg_codes(w) for w in windows], dtype=np.int8),
+        labels=np.zeros((5, 1), dtype=np.float32),
+    )
+    # C of a CpG, G of the same CpG, C without G, G without C, C of CGCG.
+    assert data._deepcpg_sites(rows).tolist() == [10, 10, -1, -1, 40]
+
+
+@pytest.mark.parametrize("binarize", [True, False])
+def test_merge_deepcpg_labels(binarize: bool) -> None:
+    labels = np.array(
+        [
+            [1.0, 0.4],  # site 0, forward strand
+            [0.8, np.nan],  # site 0, reverse strand
+            [np.nan, np.nan],  # site 1, unobserved
+            [0.5, 0.0],  # site 2, forward strand
+            [0.5, 1.0],  # site 2, reverse strand, disagrees in cellB
+        ],
+        dtype=np.float32,
+    )
+    merged, discordant_quantity = data._merge_deepcpg_labels(
+        labels, np.array([0, 2, 3]), binarize=binarize
+    )
+
+    assert discordant_quantity == 1
+    assert merged.dtype == np.float32
+    if binarize:
+        # A ratio of exactly 0.5 is not methylated.
+        expected = [[1.0, 0.0], [np.nan, np.nan], [0.0, 0.0]]
+    else:
+        expected = [[0.9, 0.4], [np.nan, np.nan], [0.5, 0.5]]
+    np.testing.assert_allclose(merged, expected, rtol=1e-6)
+
+
+@pytest.mark.parametrize(
+    ("sequence_length", "binarize"),
+    [(None, True), (11, True), (10, True), (5, False)],
+)
+def test_create_h5_dataset_from_deepcpg_files(
+    sequence_length: int | None,
+    binarize: bool,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    window_length: int = 21
+    delta: int = window_length // 2
+    rng = np.random.default_rng(0)
+    references: dict[str, str] = {
+        chromosome: "".join(rng.choice(list("ACGT"), size=length))
+        for chromosome, length in [("1", 400), ("chr2", 150)]
+    }
+    experiment_names: list[str] = ["cellA", "cellB", "Ca26"]
+    kept_names: list[str] = ["cellA", "cellB"]
+    ratio_choices: list[float] = [data.MISSING_LABEL, 0.0, 0.25, 0.5, 0.75, 1.0]
+
+    # Each site has calls on both strands, only the C, or only the G.
+    strands_by_site: dict[str, dict[int, list[int]]] = {}
+    rows_by_chromosome: dict[str, list[tuple[int, dict[str, float]]]] = {}
+    for chromosome, reference in references.items():
+        sites: list[int] = [
+            index + 1
+            for index in range(delta + 1, len(reference) - delta - 2)
+            if reference[index : index + 2] == "CG"
+        ]
+        strands_by_site[chromosome] = {
+            site: [[site, site + 1], [site], [site + 1]][site_index % 3]
+            for site_index, site in enumerate(sites)
+        }
+        rows_by_chromosome[chromosome] = [
+            (
+                position,
+                {
+                    name: float(rng.choice(ratio_choices))
+                    for name in experiment_names
+                },
+            )
+            for strands in strands_by_site[chromosome].values()
+            for position in strands
+        ]
+
+    non_cpg_position: int = next(
+        position
+        for position in range(delta + 2, len(references["1"]) - delta)
+        if "CG"
+        not in (
+            references["1"][position - 1 : position + 1],
+            references["1"][position - 2 : position],
+        )
+    )
+    rows_by_chromosome["1"] = sorted(
+        [*rows_by_chromosome["1"], (non_cpg_position, {"cellA": 1.0})]
+    )
+
+    with TemporaryDirectory() as temp_dir:
+        temp_path = Path(temp_dir)
+        deepcpg_directory = temp_path / "deepcpg"
+        deepcpg_directory.mkdir()
+        output_directory = temp_path / "output"
+        for chromosome, rows in rows_by_chromosome.items():
+            # Odd chunks split the strands of some sites between files.
+            _write_deepcpg_files(
+                deepcpg_directory,
+                chromosome,
+                references[chromosome],
+                rows,
+                experiment_names,
+                window_length,
+                chunk_size=5,
+            )
+
+        with caplog.at_level("INFO", logger="qenetics.tools.data"):
+            data.create_h5_dataset_from_deepcpg_files(
+                deepcpg_directory,
+                output_directory,
+                sequence_length,
+                excluded_experiments=["Ca26", "RSC27_4"],
+                binarize=binarize,
+            )
+
+        assert "Excluded experiment RSC27_4 not found" in caplog.text
+        assert (
+            "Dropping 1 rows of chr1 whose positions are not in a CpG site"
+            in caplog.text
+        )
+        assert sorted(path.name for path in output_directory.iterdir()) == [
+            "chr1.h5",
+            "chr2.h5",
+        ]
+
+        length: int = (
+            window_length if sequence_length is None else sequence_length
+        )
+        offset: int = (length - 1) // 2
+        for chromosome, reference in references.items():
+            labels_by_position = dict(rows_by_chromosome[chromosome])
+            expected_positions: list[int] = []
+            expected_labels: list[list[float]] = []
+            for site, strands in strands_by_site[chromosome].items():
+                # A site with only a G call is cut off if its window needs the
+                # nucleotide before the G's window.
+                if strands == [site + 1] and offset > delta - 1:
+                    continue
+
+                site_labels: list[float] = []
+                for name in kept_names:
+                    ratios = [
+                        labels_by_position[strand][name]
+                        for strand in strands
+                        if labels_by_position[strand][name]
+                        != data.MISSING_LABEL
+                    ]
+                    ratio = np.mean(ratios) if ratios else np.nan
+                    if binarize and ratios:
+                        ratio = float(ratio > 0.5)
+                    site_labels.append(ratio)
+                if not np.isnan(site_labels).all():
+                    expected_positions.append(site)
+                    expected_labels.append(site_labels)
+
+            with h5py.File(
+                output_directory / f"chr{chromosome.removeprefix('chr')}.h5"
+            ) as fd:
+                positions = fd[data.POSITIONS_KEY][()].tolist()
+                windows = [
+                    converters.one_hot_sequence_to_nucleotide_str(window)
+                    for window in fd[data.METHYLATION_SEQUENCES_KEY]
+                ]
+                ratios_group = fd[data.METHYLATION_RATIOS_KEY]
+                assert list(ratios_group) == kept_names
+                labels = np.stack(
+                    [ratios_group[name][()] for name in kept_names], axis=1
+                )
+
+            assert positions == expected_positions
+            for position, window in zip(positions, windows, strict=True):
+                start = position - 1 - offset
+                assert window == reference[start : start + length]
+                assert window[offset : offset + 2] == "CG"
+            np.testing.assert_allclose(labels, expected_labels, rtol=1e-6)
+
+        dataset = data.QuantumTorchDataset(
+            [output_directory / "chr1.h5", output_directory / "chr2.h5"],
+            threshold=0.5 if binarize else -1.0,
+            encoding=data.ONEHOT_ENCODING_STR,
+        )
+        assert dataset.data.shape[1:] == (length, 4)
+        assert dataset.experiment_names == kept_names
+        assert dataset.chromosome_names == ["1", "2"]
+
+
+def test_create_h5_dataset_from_deepcpg_files_errors() -> None:
+    reference: str = "ATATACGATATATACGATATACGATATA"
+    rows = [(6, {"cellA": 1.0}), (15, {"cellA": 0.0}), (22, {"cellA": 1.0})]
+    with TemporaryDirectory() as temp_dir:
+        temp_path = Path(temp_dir)
+        output_directory = temp_path / "output"
+        deepcpg_directory = temp_path / "deepcpg"
+        deepcpg_directory.mkdir()
+        with pytest.raises(FileNotFoundError, match="No H5 files"):
+            data.create_h5_dataset_from_deepcpg_files(
+                deepcpg_directory, output_directory
+            )
+
+        _write_deepcpg_files(
+            deepcpg_directory, "1", reference, rows, ["cellA"], 5, chunk_size=2
+        )
+        with pytest.raises(ValueError, match="between 1 and 5"):
+            data.create_h5_dataset_from_deepcpg_files(
+                deepcpg_directory, output_directory, 7
+            )
+        with pytest.raises(ValueError, match="is excluded"):
+            data.create_h5_dataset_from_deepcpg_files(
+                deepcpg_directory,
+                output_directory,
+                excluded_experiments=["cellA"],
+            )
+
+        # A copy of a chunk overlaps the original.
+        (deepcpg_directory / "copy.h5").write_bytes(
+            (deepcpg_directory / "c1_0-2.h5").read_bytes()
+        )
+        with pytest.raises(ValueError, match="unsorted or overlap"):
+            data.create_h5_dataset_from_deepcpg_files(
+                deepcpg_directory, output_directory
+            )
+        (deepcpg_directory / "copy.h5").unlink()
+
+        _write_deepcpg_files(
+            deepcpg_directory, "2", reference, rows, ["cellB"], 5, chunk_size=3
+        )
+        with pytest.raises(ValueError, match="do not match"):
+            data.create_h5_dataset_from_deepcpg_files(
+                deepcpg_directory, output_directory
+            )
+        for filepath in deepcpg_directory.glob("c2_*.h5"):
+            filepath.unlink()
+
+        _write_deepcpg_files(
+            deepcpg_directory, "2", reference, rows, ["cellA"], 3, chunk_size=3
+        )
+        with pytest.raises(ValueError, match="have length 3"):
+            data.create_h5_dataset_from_deepcpg_files(
+                deepcpg_directory, output_directory
+            )
+        for filepath in deepcpg_directory.glob("c2_*.h5"):
+            filepath.unlink()
+
+        with h5py.File(deepcpg_directory / "chr3.h5", "w") as fd:
+            fd.create_dataset(data.POSITIONS_KEY, data=[1])
+        with pytest.raises(ValueError, match="not a DeepCpG data file"):
+            data.create_h5_dataset_from_deepcpg_files(
+                deepcpg_directory, output_directory
+            )
+
+
 @pytest.mark.parametrize(
     ("original_length", "new_length", "expected_start", "expected_end"),
     [

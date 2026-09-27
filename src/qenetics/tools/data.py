@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Collection, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -30,17 +31,42 @@ SEQUENCE_BATCH_SIZE: int = 4096
 H5_CHUNK_SAMPLES: int = 64
 # DeepCpG's label for an unobserved methylation state, read as NaN.
 MISSING_LABEL: float = -1.0
+# Keys of the data files written by DeepCpG, which store the sequence window
+# of each site under `INPUTS_STR`/`DNA_STR`.
+DEEPCPG_CHROMOSOME_KEY: str = "chromo"
+DEEPCPG_POSITION_KEY: str = "pos"
+DEEPCPG_OUTPUTS_KEY: str = "outputs"
+# DeepCpG's integer code of each nucleotide, as in deepcpg.data.dna.CHAR_TO_INT.
+DEEPCPG_NUCLEOTIDE_CODES: dict[str, int] = {
+    "A": 0,
+    "T": 1,
+    "G": 2,
+    "C": 3,
+    "N": 4,
+}
 
 # One-hot encodings indexed by ASCII code. Unknown nucleotides encode as zeros.
 _ONE_HOT_NUCLEOTIDES: NDArray[np.int8] = np.zeros(
     (256, converters.UNIQUE_NUCLEOTIDE_QUANTITY), dtype=np.int8
 )
 _KNOWN_NUCLEOTIDES: NDArray[np.bool_] = np.zeros(256, dtype=bool)
+# The same, indexed by DeepCpG nucleotide code viewed as unsigned.
+_DEEPCPG_ONE_HOT_NUCLEOTIDES: NDArray[np.int8] = np.zeros_like(
+    _ONE_HOT_NUCLEOTIDES
+)
+_DEEPCPG_KNOWN_NUCLEOTIDES: NDArray[np.bool_] = np.zeros_like(
+    _KNOWN_NUCLEOTIDES
+)
 for _nucleotide in "ATCG":
-    _ONE_HOT_NUCLEOTIDES[ord(_nucleotide)] = (
-        converters.nucleotide_character_to_numpy(_nucleotide)
+    _one_hot: NDArray[np.int8] = converters.nucleotide_character_to_numpy(
+        _nucleotide
     )
+    _ONE_HOT_NUCLEOTIDES[ord(_nucleotide)] = _one_hot
     _KNOWN_NUCLEOTIDES[ord(_nucleotide)] = True
+    _DEEPCPG_ONE_HOT_NUCLEOTIDES[DEEPCPG_NUCLEOTIDE_CODES[_nucleotide]] = (
+        _one_hot
+    )
+    _DEEPCPG_KNOWN_NUCLEOTIDES[DEEPCPG_NUCLEOTIDE_CODES[_nucleotide]] = True
 
 
 class QuantumTorchDataset(Dataset):
@@ -1348,6 +1374,76 @@ def _append_to_dataset(dataset: h5py.Dataset, samples: NDArray) -> None:
     dataset[previous_length:] = samples
 
 
+@dataclass
+class _ChromosomeDatasets:
+    """
+    The datasets of a chromosome's H5 file, which grow as samples are
+    appended.
+    """
+
+    sequences: h5py.Dataset
+    positions: h5py.Dataset
+    ratios: list[h5py.Dataset]
+
+    @classmethod
+    def create(
+        cls,
+        fd: h5py.File,
+        sequence_length: int,
+        experiment_names: Sequence[str],
+    ) -> _ChromosomeDatasets:
+        """
+        Create the empty datasets of a chromosome's H5 file.
+
+        Args
+        ----
+        fd: The H5 file, open for writing.
+        sequence_length: The length of the sequence windows.
+        experiment_names: The name of each experiment.
+
+        Returns
+        -------
+        The datasets of the one-hot encoded sequence windows, the 1-based
+        position of each site's C, and the labels of each experiment.
+        """
+        ratios_group: h5py.Group = fd.create_group(METHYLATION_RATIOS_KEY)
+        return cls(
+            sequences=_create_resizable_dataset(
+                fd,
+                METHYLATION_SEQUENCES_KEY,
+                (sequence_length, converters.UNIQUE_NUCLEOTIDE_QUANTITY),
+                "i1",
+            ),
+            positions=_create_resizable_dataset(fd, POSITIONS_KEY, (), "i8"),
+            ratios=[
+                _create_resizable_dataset(
+                    ratios_group, experiment_name, (), "f4"
+                )
+                for experiment_name in experiment_names
+            ],
+        )
+
+    def append(
+        self,
+        sequences: NDArray[np.int8],
+        positions: NDArray[np.int64],
+        labels: NDArray[np.float32],
+    ) -> None:
+        """
+        Append samples to the datasets.
+
+        Args
+        ----
+        sequences: The one-hot encoded sequence window of each sample.
+        positions: The 1-based position of each sample's C.
+        labels: The label of each sample in each experiment.
+        """
+        _append_to_dataset(self.sequences, sequences)
+        _append_to_dataset(self.positions, positions)
+        for experiment_index, ratios_dataset in enumerate(self.ratios):
+            _append_to_dataset(ratios_dataset, labels[:, experiment_index])
+
+
 def _write_chromosome_h5(
     h5_filepath: Path,
     reference: NDArray[np.uint8],
@@ -1403,32 +1499,17 @@ def _write_chromosome_h5(
     starts: NDArray[np.int64] = window_starts(sites, sequence_length)
     window_offsets: NDArray[np.int64] = np.arange(sequence_length)
     with h5py.File(h5_filepath, "w") as fd:
-        sequences_dataset: h5py.Dataset = _create_resizable_dataset(
-            fd,
-            METHYLATION_SEQUENCES_KEY,
-            (sequence_length, converters.UNIQUE_NUCLEOTIDE_QUANTITY),
-            "i1",
+        datasets = _ChromosomeDatasets.create(
+            fd, sequence_length, experiment_names
         )
-        positions_dataset: h5py.Dataset = _create_resizable_dataset(
-            fd, POSITIONS_KEY, (), "i8"
-        )
-        ratios_group: h5py.Group = fd.create_group(METHYLATION_RATIOS_KEY)
-        ratios_datasets: list[h5py.Dataset] = [
-            _create_resizable_dataset(ratios_group, experiment_name, (), "f4")
-            for experiment_name in experiment_names
-        ]
-
         for batch_start in range(0, len(sites), SEQUENCE_BATCH_SIZE):
             batch = slice(batch_start, batch_start + SEQUENCE_BATCH_SIZE)
             windows: NDArray[np.uint8] = reference[
                 starts[batch, np.newaxis] + window_offsets
             ]
-            _append_to_dataset(sequences_dataset, _ONE_HOT_NUCLEOTIDES[windows])
-            _append_to_dataset(positions_dataset, sites[batch] + 1)
-            for experiment_index, ratios_dataset in enumerate(ratios_datasets):
-                _append_to_dataset(
-                    ratios_dataset, labels[batch, experiment_index]
-                )
+            datasets.append(
+                _ONE_HOT_NUCLEOTIDES[windows], sites[batch] + 1, labels[batch]
+            )
 
     return len(sites)
 
@@ -1537,6 +1618,482 @@ def create_h5_dataset_from_methylation_profiles(
         logger.info(
             "Wrote %d samples for chromosome %s", samples_written, chromosome
         )
+
+
+@dataclass
+class _DeepCpGRows:
+    """Rows of DeepCpG data files, sorted by position."""
+
+    # The 1-based position of each row's methylation call.
+    positions: NDArray[np.int64]
+    # The nucleotide codes of the sequence window centered on each position.
+    windows: NDArray[np.int8]
+    # The label of each row in each experiment, NaN if unobserved.
+    labels: NDArray[np.float32]
+
+    def select(self, rows: NDArray[np.bool_]) -> _DeepCpGRows:
+        return _DeepCpGRows(
+            self.positions[rows], self.windows[rows], self.labels[rows]
+        )
+
+    def concatenate(self, other: _DeepCpGRows) -> _DeepCpGRows:
+        return _DeepCpGRows(
+            np.concatenate([self.positions, other.positions]),
+            np.concatenate([self.windows, other.windows]),
+            np.concatenate([self.labels, other.labels]),
+        )
+
+
+def _find_deepcpg_files(
+    deepcpg_directory: Path,
+) -> tuple[dict[str, list[Path]], list[str], int]:
+    """
+    Find the DeepCpG data files of each chromosome in a directory.
+
+    Args
+    ----
+    deepcpg_directory: The directory of DeepCpG data files.
+
+    Returns
+    -------
+    The files of each chromosome in position order, the names of the
+    experiments, and the length of the sequence windows.
+
+    Raises
+    ------
+    FileNotFoundError if the directory holds no H5 files.
+    ValueError if a file is not a DeepCpG data file, or the files differ in
+    experiments or window length.
+    """
+    first_positions: dict[str, list[tuple[int, Path]]] = {}
+    experiment_names: list[str] = []
+    window_length: int = 0
+    first_filepath: Path | None = None
+    for filepath in sorted(deepcpg_directory.glob("*.h5")):
+        with h5py.File(filepath, "r") as fd:
+            missing_keys: list[str] = [
+                key
+                for key in [
+                    DEEPCPG_CHROMOSOME_KEY,
+                    DEEPCPG_POSITION_KEY,
+                    f"{INPUTS_STR}/{DNA_STR}",
+                    DEEPCPG_OUTPUTS_KEY,
+                ]
+                if key not in fd
+            ]
+            if missing_keys:
+                raise ValueError(
+                    f"{filepath} is not a DeepCpG data file, it lacks "
+                    f"{missing_keys}"
+                )
+
+            outputs: h5py.Group = fd[DEEPCPG_OUTPUTS_KEY]
+            if not all(
+                isinstance(outputs[name], h5py.Dataset) for name in outputs
+            ):
+                raise ValueError(
+                    f"{filepath} must hold one label dataset per experiment "
+                    f"in '{DEEPCPG_OUTPUTS_KEY}'"
+                )
+
+            file_window_length: int = fd[INPUTS_STR][DNA_STR].shape[1]
+            if first_filepath is None:
+                first_filepath = filepath
+                experiment_names = list(outputs)
+                window_length = file_window_length
+            else:
+                check_experiment_names(
+                    experiment_names,
+                    list(outputs),
+                    str(first_filepath),
+                    str(filepath),
+                )
+                if file_window_length != window_length:
+                    raise ValueError(
+                        f"Windows of {filepath} have length "
+                        f"{file_window_length}, but those of {first_filepath} "
+                        f"have length {window_length}"
+                    )
+
+            positions: h5py.Dataset = fd[DEEPCPG_POSITION_KEY]
+            if len(positions) == 0:
+                logger.warning("No sites in %s", filepath)
+                continue
+
+            chromosome: str = methylation.normalize_chromosome(
+                fd[DEEPCPG_CHROMOSOME_KEY].asstr()[0]
+            )
+            first_positions.setdefault(chromosome, []).append(
+                (int(positions[0]), filepath)
+            )
+
+    if first_filepath is None:
+        raise FileNotFoundError(f"No H5 files found in {deepcpg_directory}")
+
+    return (
+        {
+            chromosome: [filepath for _, filepath in sorted(files)]
+            for chromosome, files in first_positions.items()
+        },
+        experiment_names,
+        window_length,
+    )
+
+
+def _read_deepcpg_rows(
+    filepath: Path, experiment_names: Sequence[str]
+) -> _DeepCpGRows:
+    """
+    Read the rows of a DeepCpG data file.
+
+    Args
+    ----
+    filepath: The DeepCpG data file.
+    experiment_names: The names of the experiments whose labels to read.
+
+    Returns
+    -------
+    The rows of the file.
+
+    Raises
+    ------
+    ValueError if the file holds sites of more than one chromosome.
+    """
+    with h5py.File(filepath, "r") as fd:
+        if len(np.unique(fd[DEEPCPG_CHROMOSOME_KEY][()])) > 1:
+            raise ValueError(
+                f"{filepath} holds sites of more than one chromosome"
+            )
+
+        outputs: h5py.Group = fd[DEEPCPG_OUTPUTS_KEY]
+        labels: NDArray[np.float32] = np.stack(
+            [outputs[name][()] for name in experiment_names], axis=1
+        ).astype(np.float32)
+        labels[labels == MISSING_LABEL] = np.nan
+        return _DeepCpGRows(
+            positions=fd[DEEPCPG_POSITION_KEY][()].astype(np.int64),
+            windows=fd[INPUTS_STR][DNA_STR][()],
+            labels=labels,
+        )
+
+
+def _deepcpg_sites(rows: _DeepCpGRows) -> NDArray[np.int64]:
+    """
+    Find the CpG site of each row of DeepCpG data files.
+
+    DeepCpG centers each row's window on the row's position, which is either
+    the C or, for calls on the reverse strand, the G of a CpG site.
+
+    Args
+    ----
+    rows: The rows.
+
+    Returns
+    -------
+    The 1-based position of the C of each row's CpG site, or -1 if the row's
+    position is not in a CpG site.
+    """
+    center: int = rows.windows.shape[1] // 2
+    c_code: int = DEEPCPG_NUCLEOTIDE_CODES["C"]
+    g_code: int = DEEPCPG_NUCLEOTIDE_CODES["G"]
+    is_c: NDArray[np.bool_] = (rows.windows[:, center] == c_code) & (
+        rows.windows[:, center + 1] == g_code
+    )
+    is_g: NDArray[np.bool_] = (rows.windows[:, center] == g_code) & (
+        rows.windows[:, center - 1] == c_code
+    )
+    return np.where(
+        is_c, rows.positions, np.where(is_g, rows.positions - 1, -1)
+    )
+
+
+def _merge_deepcpg_labels(
+    labels: NDArray[np.float32],
+    first_rows: NDArray[np.int64],
+    *,
+    binarize: bool = True,
+) -> tuple[NDArray[np.float32], int]:
+    """
+    Combine the labels of the rows of each CpG site of DeepCpG data files.
+
+    A site has a row for each strand with a call. DeepCpG data files hold
+    methylation ratios rather than read counts, so the ratios of a site's
+    strands are averaged in each experiment. Binary labels mark a site as
+    methylated if the averaged ratio exceeds 0.5, i.e. it has more methylated
+    than unmethylated reads when both strands have equal coverage.
+
+    Args
+    ----
+    labels: The label of each row in each experiment, NaN if unobserved,
+        with the rows of each site consecutive.
+    first_rows: The index of the first row of each site.
+    binarize: Label sites with binary methylation states if True. Otherwise,
+        label sites with methylation ratios.
+
+    Returns
+    -------
+    The label of each site in each experiment, NaN if unobserved, and the
+    quantity of labels whose strands disagree on the methylation state.
+    """
+    is_observed: NDArray[np.bool_] = ~np.isnan(labels)
+    observed_quantities: NDArray[np.int64] = np.add.reduceat(
+        is_observed.astype(np.int64), first_rows, axis=0
+    )
+    methylated_quantities: NDArray[np.int64] = np.add.reduceat(
+        (labels > 0.5).astype(np.int64), first_rows, axis=0
+    )
+    ratio_sums: NDArray[np.float64] = np.add.reduceat(
+        np.where(is_observed, labels, 0.0), first_rows, axis=0
+    )
+    discordant_quantity: int = np.count_nonzero(
+        (methylated_quantities > 0)
+        & (methylated_quantities < observed_quantities)
+    )
+
+    with np.errstate(invalid="ignore"):
+        ratios: NDArray[np.float64] = ratio_sums / observed_quantities
+
+    if binarize:
+        ratios = np.where(np.isnan(ratios), np.nan, ratios > 0.5)
+
+    return ratios.astype(np.float32), discordant_quantity
+
+
+def _convert_deepcpg_chromosome(
+    filepaths: Sequence[Path],
+    h5_filepath: Path,
+    experiment_names: Sequence[str],
+    sequence_length: int,
+    *,
+    binarize: bool = True,
+    allow_N: bool = False,
+) -> int:
+    """
+    Write the DeepCpG data files of a chromosome as one H5 file of samples.
+
+    The rows of each CpG site, one per strand with a call, are combined into
+    one sample centered on the site's C, as by `window_starts`. Its window is
+    cut from the window of its row on the C, or on the G if the C has no
+    call. The files are read one at a time.
+
+    Args
+    ----
+    filepaths: The chromosome's DeepCpG data files in position order.
+    h5_filepath: The H5 file to write.
+    experiment_names: The names of the experiments to write labels of.
+    sequence_length: The length of the sequence windows, at most the length
+        of the DeepCpG windows.
+    binarize: Label sites with binary methylation states if True. Otherwise,
+        label sites with methylation ratios.
+    allow_N: Keep windows holding nucleotides other than A, T, C and G, which
+        are encoded as all zeros, if True. Otherwise, drop them.
+
+    Returns
+    -------
+    The quantity of samples written.
+
+    Raises
+    ------
+    ValueError if the positions of the files are unsorted or overlap.
+    """
+    samples_written: int = 0
+    non_cpg_rows: int = 0
+    unobserved_sites: int = 0
+    cut_off_sites: int = 0
+    unknown_sites: int = 0
+    discordant_labels: int = 0
+    pending: _DeepCpGRows | None = None
+    with h5py.File(h5_filepath, "w") as fd:
+        datasets = _ChromosomeDatasets.create(
+            fd, sequence_length, experiment_names
+        )
+        for file_index, filepath in enumerate(filepaths):
+            rows: _DeepCpGRows = _read_deepcpg_rows(filepath, experiment_names)
+            if pending is not None:
+                rows = pending.concatenate(rows)
+            if np.any(np.diff(rows.positions) <= 0):
+                raise ValueError(
+                    f"Positions of {filepath} are unsorted or overlap those "
+                    "of the preceding file"
+                )
+
+            sites: NDArray[np.int64] = _deepcpg_sites(rows)
+            is_cpg: NDArray[np.bool_] = sites >= 0
+            non_cpg_rows += np.count_nonzero(~is_cpg)
+            rows, sites = rows.select(is_cpg), sites[is_cpg]
+
+            # The rows of the last site may continue in the next file.
+            pending = None
+            if file_index < len(filepaths) - 1 and len(sites) > 0:
+                is_pending: NDArray[np.bool_] = sites == sites[-1]
+                pending = rows.select(is_pending)
+                rows, sites = rows.select(~is_pending), sites[~is_pending]
+            if len(sites) == 0:
+                continue
+
+            unique_sites, first_rows = np.unique(sites, return_index=True)
+            labels, discordant_quantity = _merge_deepcpg_labels(
+                rows.labels, first_rows, binarize=binarize
+            )
+            discordant_labels += discordant_quantity
+
+            window_length: int = rows.windows.shape[1]
+            offsets: NDArray[np.int64] = (
+                window_length // 2
+                - (rows.positions[first_rows] - unique_sites)
+                - (sequence_length - 1) // 2
+            )
+            is_observed: NDArray[np.bool_] = ~np.isnan(labels).all(axis=1)
+            fits: NDArray[np.bool_] = (offsets >= 0) & (
+                offsets + sequence_length <= window_length
+            )
+            unobserved_sites += np.count_nonzero(~is_observed)
+            cut_off_sites += np.count_nonzero(is_observed & ~fits)
+            keep: NDArray[np.bool_] = is_observed & fits
+
+            windows: NDArray[np.uint8] = rows.windows[
+                first_rows[keep, np.newaxis],
+                offsets[keep, np.newaxis] + np.arange(sequence_length),
+            ].view(np.uint8)
+            unique_sites, labels = unique_sites[keep], labels[keep]
+            if not allow_N:
+                are_known: NDArray[np.bool_] = _DEEPCPG_KNOWN_NUCLEOTIDES[
+                    windows
+                ].all(axis=1)
+                unknown_sites += np.count_nonzero(~are_known)
+                windows = windows[are_known]
+                unique_sites, labels = (
+                    unique_sites[are_known],
+                    labels[are_known],
+                )
+
+            datasets.append(
+                _DEEPCPG_ONE_HOT_NUCLEOTIDES[windows], unique_sites, labels
+            )
+            samples_written += len(unique_sites)
+
+    chromosome: str = h5_filepath.stem
+    if non_cpg_rows > 0:
+        logger.warning(
+            "Dropping %d rows of %s whose positions are not in a CpG site",
+            non_cpg_rows,
+            chromosome,
+        )
+    if unobserved_sites > 0:
+        logger.info(
+            "Dropping %d sites of %s unobserved in every experiment",
+            unobserved_sites,
+            chromosome,
+        )
+    if cut_off_sites > 0:
+        logger.info(
+            "Dropping %d sites of %s with only a reverse strand call, whose "
+            "window exceeds the DeepCpG window",
+            cut_off_sites,
+            chromosome,
+        )
+    if unknown_sites > 0:
+        logger.info(
+            "Dropping %d sites whose windows hold unknown nucleotides in %s",
+            unknown_sites,
+            chromosome,
+        )
+    if discordant_labels > 0:
+        logger.info(
+            "%d labels of %s average strands that disagree on the "
+            "methylation state",
+            discordant_labels,
+            chromosome,
+        )
+
+    return samples_written
+
+
+def create_h5_dataset_from_deepcpg_files(
+    deepcpg_directory: Path,
+    dataset_directory: Path,
+    sequence_length: int | None = None,
+    *,
+    excluded_experiments: Collection[str] = (),
+    binarize: bool = True,
+    allow_N: bool = False,
+) -> None:
+    """
+    Create one H5 file of labeled CpG sequence windows per chromosome from
+    DeepCpG data files.
+
+    DeepCpG data files, named e.g. 'c1_3801088-3833856.h5', each hold
+    consecutive sites of one chromosome: their chromosome ('chromo'), 1-based
+    position ('pos'), the nucleotide codes of the sequence window centered on
+    them ('inputs/dna'), and one dataset of methylation ratios per experiment
+    in 'outputs', with -1 for unobserved sites. The files written match those
+    of `create_h5_dataset_from_methylation_profiles`: calls on either strand
+    of a CpG site are combined into one sample centered on its C.
+
+    Args
+    ----
+    deepcpg_directory: The directory of DeepCpG data files.
+    dataset_directory: The directory in which to write the H5 files.
+    sequence_length: The length of the sequence windows, at most the length
+        of the DeepCpG windows. Defaults to the length of the DeepCpG windows.
+    excluded_experiments: The names of experiments to leave out.
+    binarize: Label sites with binary methylation states if True. Otherwise,
+        label sites with methylation ratios.
+    allow_N: Keep windows holding nucleotides other than A, T, C and G if
+        True. Otherwise, drop them.
+
+    Raises
+    ------
+    ValueError if the sequence length exceeds the length of the DeepCpG
+    windows or every experiment is excluded.
+    """
+    filepaths_by_chromosome, experiment_names, window_length = (
+        _find_deepcpg_files(deepcpg_directory)
+    )
+    for experiment_name in excluded_experiments:
+        if experiment_name not in experiment_names:
+            logger.warning(
+                "Excluded experiment %s not found in %s",
+                experiment_name,
+                deepcpg_directory,
+            )
+    experiment_names = [
+        experiment_name
+        for experiment_name in experiment_names
+        if experiment_name not in excluded_experiments
+    ]
+    if not experiment_names:
+        raise ValueError(f"Every experiment of {deepcpg_directory} is excluded")
+
+    if sequence_length is None:
+        sequence_length = window_length
+    elif not 0 < sequence_length <= window_length:
+        raise ValueError(
+            f"Sequence length must be between 1 and {window_length}, the "
+            f"length of the windows in {deepcpg_directory}, not "
+            f"{sequence_length}"
+        )
+
+    dataset_directory.mkdir(parents=True, exist_ok=True)
+    for chromosome in sorted(filepaths_by_chromosome):
+        h5_filepath: Path = dataset_directory / f"chr{chromosome}.h5"
+        samples_written: int = _convert_deepcpg_chromosome(
+            filepaths_by_chromosome[chromosome],
+            h5_filepath,
+            experiment_names,
+            sequence_length,
+            binarize=binarize,
+            allow_N=allow_N,
+        )
+        if samples_written == 0:
+            h5_filepath.unlink()
+            logger.warning("No CpG sites found on chromosome %s", chromosome)
+        else:
+            logger.info(
+                "Wrote %d samples for chromosome %s",
+                samples_written,
+                chromosome,
+            )
 
 
 def _find_bounds(original_length: int, new_length: int) -> tuple[int, int]:
