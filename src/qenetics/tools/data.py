@@ -28,6 +28,8 @@ H5_STR: str = "h5"
 POSITIONS_KEY: str = "positions"
 SEQUENCE_BATCH_SIZE: int = 4096
 H5_CHUNK_SAMPLES: int = 64
+# DeepCpG's label for an unobserved methylation state, read as NaN.
+MISSING_LABEL: float = -1.0
 
 # One-hot encodings indexed by ASCII code. Unknown nucleotides encode as zeros.
 _ONE_HOT_NUCLEOTIDES: NDArray[np.int8] = np.zeros(
@@ -124,18 +126,27 @@ class QuantumTorchDataset(Dataset):
                 self.sequence_length = dataset[METHYLATION_SEQUENCES_KEY].shape[
                     1
                 ]
-                if isinstance(dataset[METHYLATION_RATIOS_KEY], h5py.Group):
-                    self.experiment_names = dataset[
-                        METHYLATION_RATIOS_KEY
-                    ].keys()
-                    self.experiment_quantity = len(self.experiment_names)
-                else:
+                self.experiment_names: list[str] | None = (
+                    _read_h5_experiment_names(dataset)
+                )
+                if self.experiment_names is None:
                     self.experiment_quantity = 1
+                else:
+                    self.experiment_quantity = len(self.experiment_names)
 
                 try:
                     samples_key: str = _find_h5_samples_key(dataset)
                 except RuntimeError as e:
                     raise RuntimeError(f"{e} in file {filepaths[0]}")
+
+            for filepath in filepaths[1:]:
+                with h5py.File(filepath) as dataset:
+                    check_experiment_names(
+                        self.experiment_names,
+                        _read_h5_experiment_names(dataset),
+                        str(filepaths[0]),
+                        str(filepath),
+                    )
 
             input_encoding: str = _determine_sample_encoding(
                 filepaths, file_format, samples_key
@@ -200,6 +211,18 @@ class QuantumTorchDataset(Dataset):
             self.labels = torch.empty(
                 sample_quantity, dtype=torch.float, requires_grad=False
             )
+
+        # The 1-based position of each sample's CpG site, -1 if not stored,
+        # and the index into `chromosome_names` of each sample's chromosome.
+        self.positions: NDArray[np.int64] = np.full(
+            sample_quantity, -1, dtype=np.int64
+        )
+        self.chromosome_names: list[str] = [
+            chromosome_name(filepath) for filepath in filepaths
+        ]
+        self.chromosome_indices: NDArray[np.int32] = np.empty(
+            sample_quantity, dtype=np.int32
+        )
         logger.debug(
             "Initialized dataset for %d samples of length %d with %s encoding",
             sample_quantity,
@@ -234,7 +257,7 @@ class QuantumTorchDataset(Dataset):
         allow_N: Whether to allow zero in the original dataset encoding.
         """
         current_index: int = 0
-        for filepath in filepaths:
+        for file_index, filepath in enumerate(filepaths):
             logger.debug("Loading data from %s", str(filepath))
 
             if file_format == H5_STR:
@@ -242,6 +265,14 @@ class QuantumTorchDataset(Dataset):
                     file_sample_quantity: int = (
                         _determine_dataset_sample_quantity(dataset, samples_key)
                     )
+                    file_samples = slice(
+                        current_index, current_index + file_sample_quantity
+                    )
+                    self.chromosome_indices[file_samples] = file_index
+                    if POSITIONS_KEY in dataset:
+                        self.positions[file_samples] = dataset[POSITIONS_KEY][
+                            ()
+                        ]
                     if input_encoding == TOKEN_ENCODING_STR:
                         if encoding == TOKEN_ENCODING_STR:
                             if samples_key == INPUTS_STR:
@@ -334,29 +365,19 @@ class QuantumTorchDataset(Dataset):
                                 dataset, tokenizer, samples_key, allow_N=allow_N
                             )
 
+                    file_labels: torch.Tensor = torch.tensor(
+                        _read_h5_labels(dataset),
+                        dtype=torch.float,
+                        requires_grad=False,
+                    )
                     if self.experiment_quantity > 1:
-                        for label_index, experiment_name in enumerate(
-                            dataset[METHYLATION_RATIOS_KEY].keys()
-                        ):
-                            self.labels[
-                                current_index : current_index
-                                + file_sample_quantity,
-                                label_index,
-                            ] = torch.tensor(
-                                dataset[METHYLATION_RATIOS_KEY][
-                                    experiment_name
-                                ],
-                                dtype=torch.float,
-                                requires_grad=False,
-                            )
+                        self.labels[
+                            current_index : current_index + file_sample_quantity
+                        ] = file_labels
                     else:
                         self.labels[
                             current_index : current_index + file_sample_quantity
-                        ] = torch.tensor(
-                            dataset[METHYLATION_RATIOS_KEY],
-                            dtype=torch.float,
-                            requires_grad=False,
-                        )
+                        ] = file_labels[:, 0]
             else:
                 raise NotImplementedError(
                     f"Reading from file format {file_format} is not supported."
@@ -371,6 +392,115 @@ class QuantumTorchDataset(Dataset):
             raise ValueError(
                 f"Threshold must be between 0.0 and 1.0, inclusive, if desired. If not, threshold must be -1.0, not {threshold}"
             )
+
+
+def chromosome_name(filepath: Path) -> str:
+    """
+    Find the chromosome a dataset file holds from its name.
+
+    Args
+    ----
+    filepath: The dataset file, e.g. 'chr1.h5'.
+
+    Returns
+    -------
+    The chromosome name, e.g. '1', or the file's stem if it does not follow
+    the 'chr<name>' pattern.
+    """
+    return filepath.stem.removeprefix("chr")
+
+
+def _read_h5_experiment_names(dataset: h5py.File) -> list[str] | None:
+    """
+    Read the names of the experiments whose labels an H5 file holds.
+
+    Args
+    ----
+    dataset: The open H5 file.
+
+    Returns
+    -------
+    The experiment names in the order of the label columns, or None if the
+    labels are stored as a single unnamed dataset.
+    """
+    ratios: h5py.Group | h5py.Dataset = dataset[METHYLATION_RATIOS_KEY]
+    if isinstance(ratios, h5py.Group):
+        return list(ratios)
+
+    return None
+
+
+def check_experiment_names(
+    expected_names: list[str] | None,
+    names: list[str] | None,
+    expected_source: str,
+    source: str,
+) -> None:
+    """
+    Verify that two sources hold labels of the same experiments in order.
+
+    Args
+    ----
+    expected_names: The experiment names of the reference source, or None
+        for labels stored as a single unnamed dataset.
+    names: The experiment names of the source to check, or None for labels
+        stored as a single unnamed dataset.
+    expected_source: A description of the reference source.
+    source: A description of the source to check.
+
+    Raises
+    ------
+    ValueError if the experiments or their order differ.
+    """
+    if names == expected_names:
+        return
+
+    if names is None or expected_names is None:
+        difference: str = "one stores labels as a single unnamed dataset"
+    elif set(names) == set(expected_names):
+        difference = "the experiments are in a different order"
+    else:
+        missing: list[str] = [
+            name for name in expected_names if name not in names
+        ]
+        extra: list[str] = [
+            name for name in names if name not in expected_names
+        ]
+        difference = f"missing {missing}, unexpected {extra}"
+
+    raise ValueError(
+        f"Experiments of {source} do not match those of {expected_source}: "
+        f"{difference}. Expected {expected_names}, found {names}."
+    )
+
+
+def _read_h5_labels(dataset: h5py.File) -> NDArray[np.float32]:
+    """
+    Read the methylation labels of every experiment in an H5 file.
+
+    Labels are stored either as a group holding one dataset per experiment,
+    even if there is only one experiment, or as a single dataset. Unobserved
+    labels marked with `MISSING_LABEL` are converted to NaN.
+
+    Args
+    ----
+    dataset: The open H5 file.
+
+    Returns
+    -------
+    The labels, with one column per experiment in the order of the group's
+    keys, and NaN for unobserved labels.
+    """
+    ratios: h5py.Group | h5py.Dataset = dataset[METHYLATION_RATIOS_KEY]
+    if isinstance(ratios, h5py.Group):
+        labels: NDArray[np.float32] = np.stack(
+            [ratios[experiment_name][()] for experiment_name in ratios], axis=1
+        ).astype(np.float32)
+    else:
+        labels = np.asarray(ratios[()], dtype=np.float32).reshape(-1, 1)
+
+    labels[labels == MISSING_LABEL] = np.nan
+    return labels
 
 
 def _check_file_types(filepaths: Sequence[Path]) -> str:

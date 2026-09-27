@@ -42,8 +42,45 @@ def _parse_script_args() -> Namespace:
         required=False,
         type=str,
         nargs="+",
+        default=None,
+        help="Specify the chromosomes to use as validation data. Defaults to "
+        "every chromosome file in the data directory not used for training "
+        "or testing.",
+    )
+    parser.add_argument(
+        "--test-chromosomes",
+        dest="test_chromosomes",
+        required=False,
+        type=str,
+        nargs="*",
         default=["2", "4", "6", "8", "10", "12"],
-        help="Specify the chromosomes to use as validation data.",
+        help="Specify the chromosomes on which to test the final model. Pass "
+        "no values to skip testing.",
+    )
+    parser.add_argument(
+        "--experiment-name",
+        dest="experiment_name",
+        required=False,
+        type=str,
+        default=None,
+        help="The genomic experiment (dataset) under which to record the run. "
+        "Defaults to the data directory's name.",
+    )
+    parser.add_argument(
+        "--records-directory",
+        dest="records_directory",
+        required=False,
+        type=Path,
+        default=None,
+        help="The directory holding a record and HTML report of every run. "
+        "Defaults to 'records' in the output directory.",
+    )
+    parser.add_argument(
+        "--no-report",
+        dest="update_report",
+        action="store_false",
+        help="Record the run without adding it to the HTML report. It can be "
+        "added later with build_training_report.py.",
     )
     parser.add_argument(
         "--model-filepath",
@@ -98,7 +135,7 @@ def _parse_script_args() -> Namespace:
         dest="diff_method",
         required=False,
         type=str,
-        default="adjoint",
+        default="best",
         help="The differentiation method for the Pennylane QNodes.",
     )
     parser.add_argument(
@@ -228,6 +265,10 @@ if __name__ == "__main__":
             output_directory=args.output_directory,
             training_chromosomes=args.training_chromosomes,
             validation_chromosomes=args.validation_chromosomes,
+            test_chromosomes=args.test_chromosomes,
+            experiment_name=args.experiment_name,
+            records_directory=args.records_directory,
+            update_report=args.update_report,
             entangler=args.entangler,
             encoding=args.encoding,
             embedding_qubit_quantity=args.embedding_qubit_quantity,

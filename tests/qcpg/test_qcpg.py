@@ -3,13 +3,14 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import mock
 
+import h5py
 import numpy as np
 import pytest
 import torch
 from torch import optim, tensor
 from transformers import AutoTokenizer
 
-from qenetics.qcpg import qcpg, qcpg_models
+from qenetics.qcpg import qcpg, qcpg_models, records
 from qenetics.tools import converters, data
 
 UNIQUE_NUCLEOTIDE_QUANTITY: int = 4
@@ -40,6 +41,7 @@ def test_prepare_training(
             output_directory=Path(temp_dir),
             training_chromosomes=["1", "2"],
             validation_chromosomes=["1", "2"],
+            test_chromosomes=["X"],
             encoding=encoding,
             embedding_qubit_quantity=embedding_qubit_quantity,
             vocabulary_size=vocabulary_size,
@@ -157,6 +159,39 @@ def test_train_one_epoch_with_nans(
     assert all(parameter.isfinite().all() for parameter in model.parameters())
 
 
+def test_prepare_training_mismatched_experiments() -> None:
+    reference = np.frombuffer(b"ATCGATCGATCGAT", dtype=np.uint8)
+    sites = np.array([2, 6, 10], dtype=np.int64)
+    labels = np.zeros((3, 2), dtype=np.float32)
+    with TemporaryDirectory() as temp_dir:
+        temp_path = Path(temp_dir)
+        for chromosome, names in [
+            ("1", ["cellA", "cellB"]),
+            ("2", ["cellA", "cellC"]),
+        ]:
+            data._write_chromosome_h5(
+                temp_path / f"chr{chromosome}.h5",
+                reference,
+                sites,
+                labels,
+                names,
+                4,
+            )
+
+        training_parameters = qcpg.TrainingParameters(
+            data_directory=temp_path,
+            output_directory=temp_path,
+            training_chromosomes=["1"],
+            validation_chromosomes=["2"],
+            test_chromosomes=[],
+        )
+        with pytest.raises(
+            ValueError,
+            match="validation chromosomes do not match those of the training",
+        ):
+            _ = qcpg._prepare_training(training_parameters)
+
+
 def test_observed_loss() -> None:
     outputs = tensor([[0.8, 0.3], [0.6, 0.1]], dtype=torch.float)
     labels = tensor([[1.0, nan], [nan, 0.0]], dtype=torch.float)
@@ -253,9 +288,161 @@ def test_train_qnn_circuit(
             log_directory=Path(temp_dir),
             training_chromosomes=["1", "2"],
             validation_chromosomes=["1", "2"],
+            test_chromosomes=["X"],
             batch_size=2,
             epochs=2,
         )
         qcpg.train_qnn_circuit(training_parameters)
         training_parameters.entangler = "strong"
         qcpg.train_qnn_circuit(training_parameters)
+
+
+CELL_NAMES: list[str] = ["cellA", "cellB", "cellC"]
+
+
+def _write_multi_cell_dataset(
+    data_directory: Path, chromosomes: list[str], sample_quantity: int = 8
+) -> None:
+    rng = np.random.default_rng(0)
+    reference = np.frombuffer(
+        ("ATCG" * sample_quantity + "AT").encode(), dtype=np.uint8
+    )
+    sites = np.arange(2, 4 * sample_quantity, 4, dtype=np.int64)
+    for chromosome in chromosomes:
+        labels = rng.integers(0, 2, size=(sample_quantity, 3)).astype(
+            np.float32
+        )
+        labels[rng.random(labels.shape) < 0.3] = np.nan
+        # Every cell observes both classes.
+        labels[:2] = [[0.0, 1.0, 0.0], [1.0, 0.0, 1.0]]
+        data._write_chromosome_h5(
+            data_directory / f"chr{chromosome}.h5",
+            reference,
+            sites,
+            labels,
+            CELL_NAMES,
+            4,
+        )
+
+
+def test_resolve_chromosomes() -> None:
+    with TemporaryDirectory() as temp_dir:
+        temp_path = Path(temp_dir)
+        for chromosome in ["1", "2", "3", "10", "X"]:
+            (temp_path / f"chr{chromosome}.h5").touch()
+
+        training_parameters = qcpg.TrainingParameters(
+            data_directory=temp_path,
+            output_directory=temp_path,
+            training_chromosomes=["1"],
+            test_chromosomes=["2"],
+        )
+        # Validation defaults to the remaining chromosomes, in numeric order.
+        assert qcpg._resolve_chromosomes(training_parameters) == {
+            records.TRAINING_SPLIT: ["1"],
+            records.VALIDATION_SPLIT: ["3", "10", "X"],
+            records.TEST_SPLIT: ["2"],
+        }
+
+        training_parameters.test_chromosomes = ["4"]
+        with pytest.raises(FileNotFoundError, match=r"chr4\.h5"):
+            _ = qcpg._resolve_chromosomes(training_parameters)
+
+        training_parameters.test_chromosomes = ["2", "3", "10", "X"]
+        with pytest.raises(ValueError, match="No validation chromosomes"):
+            _ = qcpg._resolve_chromosomes(training_parameters)
+
+
+def test_train_qnn_circuit_records() -> None:
+    with TemporaryDirectory() as temp_dir:
+        temp_path = Path(temp_dir)
+        data_directory = temp_path / "serum"
+        data_directory.mkdir()
+        _write_multi_cell_dataset(data_directory, ["1", "2", "3"])
+        training_parameters = qcpg.TrainingParameters(
+            data_directory=data_directory,
+            output_directory=temp_path,
+            log_directory=temp_path,
+            training_chromosomes=["1"],
+            test_chromosomes=["2"],
+            batch_size=4,
+            epochs=2,
+        )
+        qcpg.train_qnn_circuit(training_parameters)
+
+        run_directories = records.find_run_directories(temp_path / "records")
+        assert len(run_directories) == 1
+        run_directory = run_directories[0]
+        # The genomic experiment defaults to the data directory's name.
+        assert run_directory.parent.name == "serum"
+        run = records.read_run(run_directory)
+        assert run["status"] == records.STATUS_COMPLETED
+        assert run["cell_names"] == CELL_NAMES
+        assert run["chromosomes"] == {
+            records.TRAINING_SPLIT: ["1"],
+            records.VALIDATION_SPLIT: ["3"],
+            records.TEST_SPLIT: ["2"],
+        }
+        assert len(run["epochs"]) == 2
+        assert len(run["epochs"][0]["cell_validation_aucs"]) == 3
+        assert set(run["metrics"]) == {
+            records.TRAINING_SPLIT,
+            records.TEST_SPLIT,
+        }
+        assert len(run["metrics"][records.TEST_SPLIT]["cells"]) == 3
+
+        test_outputs = records.read_split_outputs(
+            run_directory, records.TEST_SPLIT
+        )
+        with h5py.File(data_directory / "chr2.h5") as fd:
+            expected_positions = fd[data.POSITIONS_KEY][()]
+            expected_labels = np.stack(
+                [
+                    fd[data.METHYLATION_RATIOS_KEY][name][()]
+                    for name in CELL_NAMES
+                ],
+                axis=1,
+            )
+        assert test_outputs.chromosome_names == ["2"]
+        np.testing.assert_array_equal(
+            test_outputs.positions, expected_positions
+        )
+        np.testing.assert_array_equal(test_outputs.labels, expected_labels)
+        assert test_outputs.predictions.shape == (8, 3)
+        assert (run_directory / records.MODEL_FILENAME).exists()
+
+        # The run was added to the report.
+        assert (temp_path / "records" / "index.html").exists()
+        assert (run_directory / "cells" / "cellA" / "index.html").exists()
+
+
+def test_train_qnn_circuit_records_failure() -> None:
+    with TemporaryDirectory() as temp_dir:
+        temp_path = Path(temp_dir)
+        _write_multi_cell_dataset(temp_path, ["1", "2", "3"])
+        training_parameters = qcpg.TrainingParameters(
+            data_directory=temp_path,
+            output_directory=temp_path,
+            log_directory=temp_path,
+            training_chromosomes=["1"],
+            test_chromosomes=["2"],
+            experiment_name="failing",
+            epochs=1,
+        )
+        with (
+            mock.patch(
+                "qenetics.qcpg.qcpg._train_all_epochs",
+                side_effect=RuntimeError("training failed"),
+            ),
+            pytest.raises(RuntimeError, match="training failed"),
+        ):
+            qcpg.train_qnn_circuit(training_parameters)
+
+        (run_directory,) = records.find_run_directories(temp_path / "records")
+        assert run_directory.parent.name == "failing"
+        assert (
+            records.read_run(run_directory)["status"] == records.STATUS_FAILED
+        )
+        assert "status-failed" in (
+            run_directory.parent / "index.html"
+        ).read_text(encoding="utf-8")

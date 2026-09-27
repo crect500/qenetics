@@ -20,10 +20,12 @@ def test_QuantumTorchDataset(
     test_files: list[Path] = [
         test_qcpg_dataset_directory / f"chr{i}.h5" for i in ["1", "2"]
     ]
+    # The files mark 8 unobserved labels each with -1, which are read as NaN.
     dataset = data.QuantumTorchDataset(test_files, allow_N=True)
     assert dataset.data.shape == (16, 10)
     assert dataset.labels.shape == (16, 4)
-    assert dataset.labels.sum() == 24
+    assert dataset.labels.isnan().sum() == 16
+    assert dataset.labels.nansum() == 24
 
     dataset = data.QuantumTorchDataset(
         test_files, encoding=data.ONEHOT_ENCODING_STR, allow_N=True
@@ -31,7 +33,8 @@ def test_QuantumTorchDataset(
     assert dataset.data.shape == (16, 10, 4)
     assert dataset.data.sum() == 128.0
     assert dataset.labels.shape == (16, 4)
-    assert dataset.labels.sum() == 24
+    assert dataset.labels.isnan().sum() == 16
+    assert dataset.labels.nansum() == 24
 
     dataset = data.QuantumTorchDataset(
         test_files,
@@ -79,6 +82,171 @@ def test_h5_cpg_data_loader(test_qcpg_dataset_directory: Path) -> None:
         test_sequences, test_labels = test_samples
         assert test_sequences.shape == (2, 10, 4)
         assert test_labels.shape == (2, 4)
+
+
+@pytest.mark.parametrize("experiment_quantity", [0, 1, 3])
+def test_read_h5_labels(experiment_quantity: int) -> None:
+    # 0 experiments stands for labels stored as a single dataset. Unobserved
+    # labels are stored as either NaN or -1 and read as NaN.
+    labels = np.array(
+        [[0.0, 1.0, np.nan], [1.0, -1.0, 0.0], [-1.0, np.nan, -1.0]],
+        dtype=np.float32,
+    )
+    read_labels = np.where(labels == -1.0, np.nan, labels)
+    with (
+        TemporaryDirectory() as temp_dir,
+        h5py.File(Path(temp_dir) / "test.h5", "w") as fd,
+    ):
+        if experiment_quantity == 0:
+            fd.create_dataset(data.METHYLATION_RATIOS_KEY, data=labels[:, 0])
+            expected_labels = read_labels[:, :1]
+        else:
+            group = fd.create_group(data.METHYLATION_RATIOS_KEY)
+            for index in range(experiment_quantity):
+                group.create_dataset(f"cell{index}", data=labels[:, index])
+            expected_labels = read_labels[:, :experiment_quantity]
+
+        np.testing.assert_array_equal(data._read_h5_labels(fd), expected_labels)
+
+
+def test_QuantumTorchDataset_single_experiment(
+    test_single_amplitude_dataset_directory: Path,
+) -> None:
+    rng = np.random.default_rng(0)
+    sequence: str = "".join(rng.choice(list("ACGT"), size=600))
+    cpg_positions: list[int] = [
+        index + 1
+        for index in range(len(sequence) - 1)
+        if sequence[index : index + 2] == "CG"
+    ]
+    with TemporaryDirectory() as temp_dir:
+        temp_path = Path(temp_dir)
+        fasta_filepath = temp_path / "genome.fa"
+        _write_fasta(fasta_filepath, {"1": sequence})
+        methylation_directory = temp_path / "methylation"
+        methylation_directory.mkdir()
+        (methylation_directory / "cell.cov.txt").write_text(
+            "".join(
+                f"1\t{position}\t{position}\t0\t{2 * (index % 2)}\t1\n"
+                for index, position in enumerate(cpg_positions)
+            )
+        )
+        data.create_h5_dataset_from_methylation_profiles(
+            methylation_directory, fasta_filepath, temp_path, 10
+        )
+        with h5py.File(temp_path / "chr1.h5") as fd:
+            # The pipeline stores a single experiment in a group.
+            assert list(fd[data.METHYLATION_RATIOS_KEY]) == ["cell"]
+            expected_labels = fd[data.METHYLATION_RATIOS_KEY]["cell"][()]
+            assert set(expected_labels.tolist()) == {0.0, 1.0}
+
+        dataset = data.QuantumTorchDataset(
+            [temp_path / "chr1.h5"], encoding=data.ONEHOT_ENCODING_STR
+        )
+
+        # Labels stored as a single unnamed dataset cannot be matched to the
+        # named experiment.
+        with pytest.raises(ValueError, match="single unnamed dataset"):
+            _ = data.QuantumTorchDataset(
+                [
+                    temp_path / "chr1.h5",
+                    test_single_amplitude_dataset_directory / "chr1.h5",
+                ],
+                encoding=data.ONEHOT_ENCODING_STR,
+            )
+
+    assert dataset.experiment_names == ["cell"]
+    assert dataset.experiment_quantity == 1
+    assert dataset.labels.shape == (len(expected_labels),)
+    np.testing.assert_array_equal(dataset.labels.numpy(), expected_labels)
+
+
+def _write_labeled_h5(
+    h5_filepath: Path, experiment_names: list[str], sample_quantity: int = 3
+) -> None:
+    sites = np.arange(2, 2 + 4 * sample_quantity, 4, dtype=np.int64)
+    labels = np.zeros((sample_quantity, len(experiment_names)), np.float32)
+    data._write_chromosome_h5(
+        h5_filepath,
+        _reference("ATCG" * sample_quantity + "AT"),
+        sites,
+        labels,
+        experiment_names,
+        4,
+    )
+
+
+@pytest.mark.parametrize(
+    ("names", "message"),
+    [
+        (["cellA", "cellB"], None),
+        (["cellB", "cellA"], "different order"),
+        (["cellA", "cellC"], r"missing \['cellB'\], unexpected \['cellC'\]"),
+        (["cellA"], r"missing \['cellB'\], unexpected \[\]"),
+        (None, "single unnamed dataset"),
+    ],
+)
+def test_check_experiment_names(names: list[str] | None, message: str) -> None:
+    if message is None:
+        data.check_experiment_names(["cellA", "cellB"], names, "a", "b")
+    else:
+        with pytest.raises(ValueError, match=message):
+            data.check_experiment_names(["cellA", "cellB"], names, "a", "b")
+
+
+def test_QuantumTorchDataset_mismatched_experiments() -> None:
+    with TemporaryDirectory() as temp_dir:
+        temp_path = Path(temp_dir)
+        _write_labeled_h5(temp_path / "chr1.h5", ["cellA", "cellB"])
+        _write_labeled_h5(temp_path / "chr2.h5", ["cellA", "cellC"])
+        _write_labeled_h5(temp_path / "chr3.h5", ["cellA", "cellB"])
+
+        dataset = data.QuantumTorchDataset(
+            [temp_path / "chr1.h5", temp_path / "chr3.h5"],
+            encoding=data.ONEHOT_ENCODING_STR,
+        )
+        assert dataset.experiment_names == ["cellA", "cellB"]
+        assert dataset.labels.shape == (6, 2)
+
+        with pytest.raises(ValueError, match=r"chr2\.h5 do not match"):
+            _ = data.QuantumTorchDataset(
+                [temp_path / "chr1.h5", temp_path / "chr2.h5"],
+                encoding=data.ONEHOT_ENCODING_STR,
+            )
+
+
+def test_QuantumTorchDataset_site_identity(
+    test_single_amplitude_dataset_directory: Path,
+) -> None:
+    with TemporaryDirectory() as temp_dir:
+        temp_path = Path(temp_dir)
+        _write_labeled_h5(temp_path / "chr1.h5", ["cellA"])
+        _write_labeled_h5(temp_path / "chrX.h5", ["cellA"], sample_quantity=2)
+        dataset = data.QuantumTorchDataset(
+            [temp_path / "chr1.h5", temp_path / "chrX.h5"],
+            encoding=data.ONEHOT_ENCODING_STR,
+        )
+
+    assert dataset.chromosome_names == ["1", "X"]
+    assert dataset.chromosome_indices.tolist() == [0, 0, 0, 1, 1]
+    # Positions are the 1-based position of each site's C.
+    assert dataset.positions.tolist() == [3, 7, 11, 3, 7]
+
+    # Files without stored positions give -1.
+    dataset = data.QuantumTorchDataset(
+        [test_single_amplitude_dataset_directory / "chr1.h5"],
+        encoding=data.ONEHOT_ENCODING_STR,
+    )
+    assert (dataset.positions == -1).all()
+    assert dataset.chromosome_names == ["1"]
+
+
+@pytest.mark.parametrize(
+    ("filename", "expected_name"),
+    [("chr1.h5", "1"), ("chrX.h5", "X"), ("c1_0-8.h5", "c1_0-8")],
+)
+def test_chromosome_name(filename: str, expected_name: str) -> None:
+    assert data.chromosome_name(Path(filename)) == expected_name
 
 
 @pytest.mark.parametrize(

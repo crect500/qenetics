@@ -82,7 +82,7 @@ def _parse_script_args() -> Namespace:
         dest="diff_method",
         required=False,
         type=str,
-        default="adjoint",
+        default="best",
         help="The differentiation method for the Pennylane QNodes.",
     )
     parser.add_argument(

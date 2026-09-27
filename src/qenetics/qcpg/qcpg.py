@@ -1,7 +1,7 @@
 import logging
 import os
 import socket
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from pathlib import Path
 
 import jax
@@ -12,7 +12,6 @@ import torch
 import torch.multiprocessing as mp
 from jax import numpy as jnp
 from numpy.typing import NDArray
-from sklearn.metrics import roc_auc_score
 from torch import Tensor, nn, optim
 from torch.distributed import destroy_process_group, init_process_group
 from torch.nn.parallel import DistributedDataParallel
@@ -20,26 +19,39 @@ from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 from transformers import AutoTokenizer
 
-from qenetics.qcpg import qcpg_models
-from qenetics.tools import data, dna, metrics
+from qenetics.qcpg import qcpg_models, records
+from qenetics.tools import data, dna, metrics, report
 
 logger = logging.getLogger(__name__)
+
+# The cell name recorded for labels stored as a single unnamed dataset.
+UNNAMED_EXPERIMENT: str = "unnamed"
 
 
 @dataclass
 class TrainingParameters:
     data_directory: Path
     output_directory: Path
+    # The chromosome splits of Angermueller et al. (2017). Validation
+    # chromosomes default to every chromosome file in the data directory not
+    # used for training or testing.
     training_chromosomes: list[str] = field(
         default_factory=lambda: ["1", "3", "5", "7", "9", "11"]
     )
-    validation_chromosomes: list[str] = field(
+    validation_chromosomes: list[str] | None = None
+    test_chromosomes: list[str] = field(
         default_factory=lambda: ["2", "4", "6", "8", "10", "12"]
     )
+    # Records of each run are stored under
+    # `records_directory / experiment_name`, defaulting to
+    # `output_directory / "records"` and the data directory's name.
+    experiment_name: str | None = None
+    records_directory: Path | None = None
+    update_report: bool = True
     encoding: str = data.ONEHOT_ENCODING_STR
     entangler: str = "basic"
     measurement: str = "probability"
-    diff_method: str = "adjoint"
+    diff_method: str = "best"
     layer_quantity: int = 1
     epochs: int = 100
     learning_rate: float = 0.0001
@@ -47,7 +59,7 @@ class TrainingParameters:
     l2_regularizer: float = 0.0
     batch_size: int = 128
     report_every: int = 1
-    device_name: str = "default.qubit"
+    device_name: str = "lightning.qubit"
     tokenizer: AutoTokenizer | None = None
     embedding_qubit_quantity: int | None = None
     vocabulary_size: int | None = None
@@ -330,37 +342,172 @@ def _observed_loss(outputs: Tensor, labels: Tensor) -> Tensor | None:
     )
 
 
+@dataclass
+class _Datasets:
+    """
+    The datasets of each chromosome split.
+
+    Attributes
+    ----------
+    training: The training dataset.
+    validation: The validation dataset.
+    test: The test dataset, or None if no test chromosomes are given.
+    chromosomes: The chromosomes of each split, indexed by split name.
+    """
+
+    training: data.QuantumTorchDataset
+    validation: data.QuantumTorchDataset
+    test: data.QuantumTorchDataset | None
+    chromosomes: dict[str, list[str]]
+
+
+def _chromosome_sort_key(chromosome: str) -> tuple[int, int | str]:
+    """
+    Order chromosomes numerically, followed by named chromosomes such as X.
+
+    Args
+    ----
+    chromosome: The chromosome name.
+
+    Returns
+    -------
+    The sort key.
+    """
+    return (0, int(chromosome)) if chromosome.isdigit() else (1, chromosome)
+
+
+def _resolve_chromosomes(
+    training_parameters: TrainingParameters,
+) -> dict[str, list[str]]:
+    """
+    Determine the chromosomes of each split and verify their files exist.
+
+    Args
+    ----
+    training_parameters: The training parameters.
+
+    Returns
+    -------
+    The chromosomes of each split, indexed by split name.
+
+    Raises
+    ------
+    FileNotFoundError if a chromosome's file is missing.
+    ValueError if no validation chromosomes remain.
+    """
+    data_directory: Path = training_parameters.data_directory
+    training: list[str] = list(training_parameters.training_chromosomes)
+    test: list[str] = list(training_parameters.test_chromosomes)
+    if training_parameters.validation_chromosomes is None:
+        validation: list[str] = sorted(
+            (
+                data.chromosome_name(filepath)
+                for filepath in data_directory.glob("chr*.h5")
+                if data.chromosome_name(filepath) not in {*training, *test}
+            ),
+            key=_chromosome_sort_key,
+        )
+    else:
+        validation = list(training_parameters.validation_chromosomes)
+
+    if not training:
+        raise ValueError("No training chromosomes specified.")
+    if not validation:
+        raise ValueError(
+            f"No validation chromosomes: none specified, and no chromosome "
+            f"files in {data_directory} remain after the training and test "
+            "chromosomes."
+        )
+
+    missing_filepaths: list[str] = [
+        str(data_directory / f"chr{chromosome}.h5")
+        for chromosome in dict.fromkeys([*training, *validation, *test])
+        if not (data_directory / f"chr{chromosome}.h5").exists()
+    ]
+    if missing_filepaths:
+        raise FileNotFoundError(
+            f"Chromosome files not found: {', '.join(missing_filepaths)}"
+        )
+
+    return {
+        records.TRAINING_SPLIT: training,
+        records.VALIDATION_SPLIT: validation,
+        records.TEST_SPLIT: test,
+    }
+
+
+def _load_datasets(training_parameters: TrainingParameters) -> _Datasets:
+    """
+    Load the training, validation and test datasets.
+
+    Args
+    ----
+    training_parameters: The training parameters.
+
+    Returns
+    -------
+    The datasets of each split.
+
+    Raises
+    ------
+    ValueError if the splits hold labels of different experiments.
+    """
+    chromosomes: dict[str, list[str]] = _resolve_chromosomes(
+        training_parameters
+    )
+    datasets: dict[str, data.QuantumTorchDataset | None] = {}
+    for split, split_chromosomes in chromosomes.items():
+        if not split_chromosomes:
+            datasets[split] = None
+            continue
+
+        dataset = data.QuantumTorchDataset(
+            [
+                training_parameters.data_directory / f"chr{chromosome}.h5"
+                for chromosome in split_chromosomes
+            ],
+            encoding=training_parameters.encoding,
+            tokenizer=training_parameters.tokenizer,
+        )
+        logger.info(
+            "Loaded %d samples from %s chromosomes %s",
+            len(dataset),
+            split,
+            ", ".join(split_chromosomes),
+        )
+        if split != records.TRAINING_SPLIT:
+            data.check_experiment_names(
+                datasets[records.TRAINING_SPLIT].experiment_names,
+                dataset.experiment_names,
+                "the training chromosomes",
+                f"the {split} chromosomes",
+            )
+        datasets[split] = dataset
+
+    return _Datasets(
+        training=datasets[records.TRAINING_SPLIT],
+        validation=datasets[records.VALIDATION_SPLIT],
+        test=datasets[records.TEST_SPLIT],
+        chromosomes=chromosomes,
+    )
+
+
 def _prepare_training(
-    training_parameters: TrainingParameters, rank: int | None = None
+    training_parameters: TrainingParameters,
+    rank: int | None = None,
+    datasets: _Datasets | None = None,
 ) -> tuple[
     DataLoader,
     DataLoader,
     qcpg_models.QNN | DistributedDataParallel,
     optim.Optimizer,
 ]:
-    training_dataset = data.QuantumTorchDataset(
-        [
-            training_parameters.data_directory / f"chr{chromosome}.h5"
-            for chromosome in training_parameters.training_chromosomes
-        ],
-        encoding=training_parameters.encoding,
-        tokenizer=training_parameters.tokenizer,
-    )
-    logger.info("Loaded %d samples from training files", len(training_dataset))
+    if datasets is None:
+        datasets = _load_datasets(training_parameters)
+
+    training_dataset: data.QuantumTorchDataset = datasets.training
+    validation_dataset: data.QuantumTorchDataset = datasets.validation
     logger.debug("Training set shape %s", str(training_dataset.data.shape))
-    validation_dataset = data.QuantumTorchDataset(
-        [
-            training_parameters.data_directory / f"chr{chromosome}.h5"
-            for chromosome in training_parameters.validation_chromosomes
-        ],
-        encoding=training_parameters.encoding,
-        tokenizer=training_parameters.tokenizer,
-    )
-    logger.info(
-        logger.info(
-            "Loaded %d samples from validation files", len(validation_dataset)
-        )
-    )
     if training_parameters.encoding in ["token", "bpe"]:
         encoding: str = "token"
     else:
@@ -484,30 +631,61 @@ def _train_one_epoch(
     return return_loss
 
 
-def _evaluate_validation_set(
+@dataclass
+class _Evaluation:
+    """
+    The outputs of evaluating a model on a dataset.
+
+    Attributes
+    ----------
+    loss: The mean loss over batches with observed labels, NaN if none.
+    auc: The AUC of all observed labels pooled, NaN if undefined.
+    predictions: The predictions, one row per sample in dataset order and one
+        column per experiment.
+    labels: The labels, in the same layout, NaN if unobserved.
+    """
+
+    loss: float
+    auc: float
+    predictions: NDArray[np.float32]
+    labels: NDArray[np.float32]
+
+
+def _evaluate(
     model: nn.Module,
-    validation_loader: DataLoader,
+    loader: DataLoader,
     training_parameters: TrainingParameters,
     *,
     rank: int | None = None,
-) -> tuple[float, float]:
+) -> _Evaluation:
+    """
+    Evaluate a model on every sample of a loader.
+
+    Args
+    ----
+    model: The model.
+    loader: The samples to evaluate, in the order to report them.
+    training_parameters: The training parameters.
+    rank: The device to evaluate on, if a GPU.
+
+    Returns
+    -------
+    The loss, pooled AUC, predictions and labels.
+    """
     accumulated_loss: float = 0.0
     loss_batches: int = 0
     model.eval()
     all_outputs: list[Tensor] = []
     all_labels: list[Tensor] = []
     with torch.no_grad():
-        for validation_data in validation_loader:
-            inputs, labels = validation_data
+        for inputs, labels in loader:
             if rank is not None:
                 inputs = inputs.to(rank)
                 labels = labels.to(rank)
             outputs: Tensor = model(inputs)
 
-            flat_labels: Tensor = labels.detach().cpu().flatten()
-            is_observed: Tensor = ~flat_labels.isnan()
-            all_outputs.append(outputs.detach().cpu().flatten()[is_observed])
-            all_labels.append(flat_labels[is_observed])
+            all_outputs.append(outputs.detach().cpu().reshape(len(outputs), -1))
+            all_labels.append(labels.detach().cpu().reshape(len(labels), -1))
 
             loss: Tensor | None = _observed_loss(outputs, labels)
             if loss is None:
@@ -525,24 +703,37 @@ def _evaluate_validation_set(
                     for parameter_vector in model.parameters()
                 )
 
-            accumulated_loss += loss
+            accumulated_loss += loss.item()
             loss_batches += 1
 
-    scores: Tensor = torch.cat(all_outputs)
-    truth: Tensor = torch.cat(all_labels)
+    predictions: NDArray[np.float32] = torch.cat(all_outputs).numpy()
+    labels_array: NDArray[np.float32] = torch.cat(all_labels).numpy()
     if loss_batches == 0:
-        logger.warning("Validation set has no observed labels.")
-        return float("nan"), float("nan")
-
-    if truth.min() == truth.max():
-        logger.warning(
-            "Validation set is single-class; AUC is undefined for this epoch."
+        logger.warning("Evaluation set has no observed labels.")
+        return _Evaluation(
+            float("nan"), float("nan"), predictions, labels_array
         )
-        validation_auc: float = float("nan")
-    else:
-        validation_auc = roc_auc_score(truth.numpy(), scores.numpy())
 
-    return accumulated_loss / loss_batches, validation_auc
+    auc: float = metrics.cell_metrics(predictions, labels_array).auc
+    if np.isnan(auc):
+        logger.warning("Evaluation set is single-class; AUC is undefined.")
+
+    return _Evaluation(
+        accumulated_loss / loss_batches, auc, predictions, labels_array
+    )
+
+
+def _evaluate_validation_set(
+    model: nn.Module,
+    validation_loader: DataLoader,
+    training_parameters: TrainingParameters,
+    *,
+    rank: int | None = None,
+) -> tuple[float, float]:
+    evaluation: _Evaluation = _evaluate(
+        model, validation_loader, training_parameters, rank=rank
+    )
+    return evaluation.loss, evaluation.auc
 
 
 def _train_all_epochs(
@@ -553,6 +744,7 @@ def _train_all_epochs(
     output_directory: Path,
     training_parameters: TrainingParameters,
     rank: int | None = None,
+    run_directory: Path | None = None,
 ) -> None:
     for epoch in range(training_parameters.epochs):
         logger.info(f"Training epoch {epoch}")
@@ -564,17 +756,258 @@ def _train_all_epochs(
             training_parameters,
             rank=rank,
         )
-        average_validation_loss, average_auc = _evaluate_validation_set(
+        evaluation: _Evaluation = _evaluate(
             model, validation_loader, training_parameters, rank=rank
         )
         logger.info(
             f"Epoch {epoch} Training loss: {average_training_loss}, Validation loss: "
-            f"{average_validation_loss}, Validation AUC: {average_auc}"
+            f"{evaluation.loss}, Validation AUC: {evaluation.auc}"
         )
+        if run_directory is not None:
+            cell_results, _ = metrics.experiment_metrics(
+                evaluation.predictions, evaluation.labels
+            )
+            records.append_epoch(
+                run_directory,
+                epoch,
+                average_training_loss,
+                evaluation.loss,
+                evaluation.auc,
+                [cell_result.auc for cell_result in cell_results],
+            )
         if training_parameters.gpu_quantity > 1 and rank == 0:
             torch.save(model.module.state_dict(), output_directory / "model.pt")
         else:
             torch.save(model.state_dict(), output_directory / "model.pt")
+
+
+def _experiment_name(training_parameters: TrainingParameters) -> str:
+    """
+    Name the genomic experiment a run trains on.
+
+    Args
+    ----
+    training_parameters: The training parameters.
+
+    Returns
+    -------
+    The given experiment name, or the data directory's name.
+    """
+    if training_parameters.experiment_name:
+        return training_parameters.experiment_name
+
+    return training_parameters.data_directory.resolve().name
+
+
+def _records_directory(training_parameters: TrainingParameters) -> Path:
+    """
+    Find the root folder of the run records.
+
+    Args
+    ----
+    training_parameters: The training parameters.
+
+    Returns
+    -------
+    The given records directory, or `output_directory / "records"`.
+    """
+    if training_parameters.records_directory is not None:
+        return training_parameters.records_directory
+
+    return training_parameters.output_directory / "records"
+
+
+def _parameters_to_record(
+    training_parameters: TrainingParameters,
+) -> dict[str, object]:
+    """
+    Collect the training parameters to store in a run record.
+
+    Args
+    ----
+    training_parameters: The training parameters.
+
+    Returns
+    -------
+    The parameters, with the tokenizer replaced by its name.
+    """
+    parameters: dict[str, object] = {}
+    for parameter in fields(training_parameters):
+        value: object = getattr(training_parameters, parameter.name)
+        if parameter.name == "tokenizer" and value is not None:
+            value = getattr(value, "name_or_path", type(value).__name__)
+        parameters[parameter.name] = value
+
+    return parameters
+
+
+def _update_report(
+    training_parameters: TrainingParameters, run_directory: Path
+) -> None:
+    """
+    Add a run to the HTML report, without letting a failure stop training.
+
+    Args
+    ----
+    training_parameters: The training parameters.
+    run_directory: The run's record folder.
+    """
+    if not training_parameters.update_report:
+        return
+
+    try:
+        report.add_run(_records_directory(training_parameters), run_directory)
+    except Exception:
+        logger.exception("Could not add run %s to the report", run_directory)
+
+
+def _start_run_record(
+    training_parameters: TrainingParameters, datasets: _Datasets
+) -> Path:
+    """
+    Create a run's record and list it in the report as running.
+
+    Args
+    ----
+    training_parameters: The training parameters.
+    datasets: The datasets of each split.
+
+    Returns
+    -------
+    The run's record folder.
+    """
+    run_directory: Path = records.create_run_record(
+        _records_directory(training_parameters),
+        _experiment_name(training_parameters),
+        _parameters_to_record(training_parameters),
+        datasets.chromosomes,
+        datasets.training.experiment_names or [UNNAMED_EXPERIMENT],
+    )
+    logger.info("Recording run in %s", run_directory)
+    _update_report(training_parameters, run_directory)
+    return run_directory
+
+
+def _record_final_evaluation(
+    model: nn.Module | DistributedDataParallel,
+    datasets: _Datasets,
+    training_parameters: TrainingParameters,
+    run_directory: Path,
+    rank: int | None = None,
+) -> None:
+    """
+    Evaluate the final model on the training and test splits and record it.
+
+    Every sample is evaluated in dataset order, so each output row matches the
+    dataset's chromosome and position of that sample.
+
+    Args
+    ----
+    model: The trained model.
+    datasets: The datasets of each split.
+    training_parameters: The training parameters.
+    run_directory: The run's record folder.
+    rank: The device to evaluate on, if a GPU.
+    """
+    # Evaluate the underlying model so a distributed model does not wait on
+    # the other processes.
+    if isinstance(model, DistributedDataParallel):
+        model = model.module
+
+    for split, dataset in [
+        (records.TRAINING_SPLIT, datasets.training),
+        (records.TEST_SPLIT, datasets.test),
+    ]:
+        if dataset is None:
+            continue
+
+        evaluation: _Evaluation = _evaluate(
+            model,
+            DataLoader(
+                dataset,
+                batch_size=training_parameters.batch_size,
+                shuffle=False,
+            ),
+            training_parameters,
+            rank=rank,
+        )
+        records.write_split_outputs(
+            run_directory,
+            split,
+            records.SplitOutputs(
+                chromosome_names=dataset.chromosome_names,
+                chromosome_indices=dataset.chromosome_indices,
+                positions=dataset.positions,
+                labels=evaluation.labels,
+                predictions=evaluation.predictions,
+            ),
+        )
+        cell_results, pooled_result = metrics.experiment_metrics(
+            evaluation.predictions, evaluation.labels
+        )
+        records.write_metrics(
+            run_directory, split, evaluation.loss, cell_results, pooled_result
+        )
+        logger.info(
+            "Final %s loss: %s, AUC: %s",
+            split,
+            evaluation.loss,
+            pooled_result.auc,
+        )
+
+    torch.save(model.state_dict(), run_directory / records.MODEL_FILENAME)
+
+
+def _train_and_record(
+    model: nn.Module | DistributedDataParallel,
+    training_loader: DataLoader,
+    validation_loader: DataLoader,
+    optimizer: optim.Optimizer,
+    training_parameters: TrainingParameters,
+    datasets: _Datasets,
+    *,
+    rank: int | None = None,
+    record: bool = True,
+) -> None:
+    """
+    Train a model and keep a record of the run.
+
+    Args
+    ----
+    model: The model.
+    training_loader: The training samples.
+    validation_loader: The validation samples.
+    optimizer: The optimizer.
+    training_parameters: The training parameters.
+    datasets: The datasets of each split.
+    rank: The device to train on, if a GPU.
+    record: Keep a record of the run. Only one process of a distributed run
+        records it.
+    """
+    run_directory: Path | None = (
+        _start_run_record(training_parameters, datasets) if record else None
+    )
+    status: str = records.STATUS_FAILED
+    try:
+        _train_all_epochs(
+            model=model,
+            training_loader=training_loader,
+            validation_loader=validation_loader,
+            optimizer=optimizer,
+            output_directory=training_parameters.output_directory,
+            training_parameters=training_parameters,
+            rank=rank,
+            run_directory=run_directory,
+        )
+        if run_directory is not None:
+            _record_final_evaluation(
+                model, datasets, training_parameters, run_directory, rank=rank
+            )
+        status = records.STATUS_COMPLETED
+    finally:
+        if run_directory is not None:
+            records.finish_run(run_directory, status)
+            _update_report(training_parameters, run_directory)
 
 
 def _single_distributed_gpu_train_qcpg_circuit(
@@ -590,18 +1023,20 @@ def _single_distributed_gpu_train_qcpg_circuit(
         format=f"[Rank {rank}] " + "%(asctime)s - %(levelname)s - %(message)s",
     )
     logger.info("Setting up training on GPU %d", rank)
+    datasets: _Datasets = _load_datasets(training_parameters)
     training_loader, validation_loader, model, optimizer = _prepare_training(
-        training_parameters, rank=rank
+        training_parameters, rank=rank, datasets=datasets
     )
     logger.info("Finished training setup on GPU %d", rank)
-    _train_all_epochs(
-        model=model,
-        training_loader=training_loader,
-        validation_loader=validation_loader,
-        optimizer=optimizer,
-        output_directory=training_parameters.output_directory,
-        training_parameters=training_parameters,
+    _train_and_record(
+        model,
+        training_loader,
+        validation_loader,
+        optimizer,
+        training_parameters,
+        datasets,
         rank=rank,
+        record=rank == 0,
     )
     destroy_process_group()
 
@@ -653,16 +1088,17 @@ def train_qnn_circuit(training_parameters: TrainingParameters) -> None:
             rank: int | None = 0
         else:
             rank = None
+        datasets: _Datasets = _load_datasets(training_parameters)
         training_loader, validation_loader, model, optimizer = (
-            _prepare_training(training_parameters, rank=rank)
+            _prepare_training(training_parameters, rank=rank, datasets=datasets)
         )
-        _train_all_epochs(
-            model=model,
-            training_loader=training_loader,
-            validation_loader=validation_loader,
-            optimizer=optimizer,
-            output_directory=training_parameters.output_directory,
-            training_parameters=training_parameters,
+        _train_and_record(
+            model,
+            training_loader,
+            validation_loader,
+            optimizer,
+            training_parameters,
+            datasets,
             rank=rank,
         )
     elif training_parameters.gpu_quantity > 1:
