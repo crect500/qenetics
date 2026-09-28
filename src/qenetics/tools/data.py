@@ -68,10 +68,29 @@ for _nucleotide in "ATCG":
     )
     _DEEPCPG_KNOWN_NUCLEOTIDES[DEEPCPG_NUCLEOTIDE_CODES[_nucleotide]] = True
 
+# The int8 one-hot encoding of each nucleotide code, from 0 for A to 3 for C,
+# with its 4 bytes read as one integer.
+_ONE_HOT_WORDS: NDArray[np.uint32] = np.array(
+    [converters.nucleotide_integer_to_numpy(code) for code in range(4)],
+    dtype=np.int8,
+).view(np.uint32)[:, 0]
+# The float one-hot encoding of each nucleotide code plus one, from -1 for an
+# unknown nucleotide, encoded as zeros, to 3 for C.
+_CODE_ONE_HOT_NUCLEOTIDES: torch.Tensor = torch.tensor(
+    np.array(
+        [converters.nucleotide_integer_to_numpy(code) for code in range(-1, 4)]
+    ),
+    dtype=torch.float,
+)
+
 
 class QuantumTorchDataset(Dataset):
     """
     Facilitates processing a dataset of nucleotide sequences.
+
+    Sequences are held compactly, one byte per nucleotide (four for BPE
+    tokens), and encoded as floats only when samples are fetched. Holding the
+    float one-hot encoding instead would take 16 bytes per nucleotide.
     """
 
     def __init__(
@@ -118,14 +137,21 @@ class QuantumTorchDataset(Dataset):
         )
 
     def __len__(self: QuantumTorchDataset) -> int:
-        return len(self.data)
+        return len(self.sequences)
 
     def __getitem__(
         self: QuantumTorchDataset, idx
     ) -> tuple[torch.Tensor, torch.Tensor]:
         if torch.is_tensor(idx):
             idx = idx.tolist()
-        return self.data[idx], self.labels[idx]
+        sequences: torch.Tensor = self.sequences[idx]
+        if self.encoding == ONEHOT_ENCODING_STR:
+            samples: torch.Tensor = _CODE_ONE_HOT_NUCLEOTIDES[
+                sequences.long() + 1
+            ]
+        else:
+            samples = sequences.float()
+        return samples, self.labels[idx]
 
     def _retrieve_data_parameters(
         self: QuantumTorchDataset, filepaths: Sequence[Path], file_format: str
@@ -207,24 +233,22 @@ class QuantumTorchDataset(Dataset):
             filepaths, file_format, samples_key
         )
 
-        if encoding in [TOKEN_ENCODING_STR, BPE_ENCODING_STR]:
-            self.data = torch.empty(
-                sample_quantity,
-                self.sequence_length,
-                dtype=torch.float,
-                requires_grad=False,
-            )
-        elif encoding == ONEHOT_ENCODING_STR:
-            self.data = torch.empty(
-                sample_quantity,
-                self.sequence_length,
-                converters.UNIQUE_NUCLEOTIDE_QUANTITY,
-                dtype=torch.float,
-                requires_grad=False,
-            )
-
+        # Nucleotide codes or tokens, as returned by `_sequence_codes`, or
+        # BPE token IDs.
+        if encoding in [TOKEN_ENCODING_STR, ONEHOT_ENCODING_STR]:
+            sequences_dtype: torch.dtype = torch.int8
+        elif encoding == BPE_ENCODING_STR:
+            sequences_dtype = torch.int32
         else:
             raise ValueError(f"Encoding method {encoding} not recognized")
+
+        self.encoding: str = encoding
+        self.sequences: torch.Tensor = torch.empty(
+            sample_quantity,
+            self.sequence_length,
+            dtype=sequences_dtype,
+            requires_grad=False,
+        )
 
         if self.experiment_quantity > 1:
             self.labels = torch.empty(
@@ -299,96 +323,47 @@ class QuantumTorchDataset(Dataset):
                         self.positions[file_samples] = dataset[POSITIONS_KEY][
                             ()
                         ]
-                    if input_encoding == TOKEN_ENCODING_STR:
-                        if encoding == TOKEN_ENCODING_STR:
-                            if samples_key == INPUTS_STR:
-                                self.data[
-                                    current_index : current_index
-                                    + file_sample_quantity,
-                                    :,
-                                ] = torch.tensor(
-                                    dataset[INPUTS_STR][DNA_STR],
-                                    dtype=torch.float,
-                                    requires_grad=False,
-                                )
-                            elif samples_key == METHYLATION_STR:
-                                self.data[
-                                    current_index : current_index
-                                    + file_sample_quantity,
-                                    :,
-                                ] = torch.tensor(
-                                    dataset[METHYLATION_STR],
-                                    dtype=torch.float,
-                                    requires_grad=False,
-                                )
-                        elif encoding == ONEHOT_ENCODING_STR:
-                            self.data[
-                                current_index : current_index
-                                + file_sample_quantity,
-                                :,
-                            ] = torch.tensor(
-                                _convert_token_dataset_to_onehot(
-                                    dataset, samples_key
-                                )
+                    if encoding == BPE_ENCODING_STR:
+                        if tokenizer is None:
+                            raise ValueError(
+                                "Must provide a tokenizer to to convert to BPE"
                             )
-                        elif encoding == "bpe":
-                            if tokenizer is None:
-                                raise ValueError(
-                                    "Must provide a tokenizer to to convert to BPE"
-                                )
 
-                            self.data[
-                                current_index : current_index
-                                + file_sample_quantity,
-                            ] = _convert_token_dataset_to_bpe(
-                                dataset, tokenizer, samples_key
+                        if input_encoding == TOKEN_ENCODING_STR:
+                            bpe_ids: torch.Tensor = (
+                                _convert_token_dataset_to_bpe(
+                                    dataset, tokenizer, samples_key
+                                )
                             )
-                    elif input_encoding == ONEHOT_ENCODING_STR:
-                        if encoding == ONEHOT_ENCODING_STR:
-                            if samples_key == INPUTS_STR:
-                                self.data[
-                                    current_index : current_index
-                                    + file_sample_quantity,
-                                    :,
-                                    :,
-                                ] = torch.tensor(
-                                    dataset[INPUTS_STR][DNA_STR],
-                                    dtype=torch.float,
-                                    requires_grad=False,
-                                )
-                            elif samples_key == METHYLATION_STR:
-                                self.data[
-                                    current_index : current_index
-                                    + file_sample_quantity,
-                                    :,
-                                    :,
-                                ] = torch.tensor(
-                                    np.array(
-                                        dataset[METHYLATION_SEQUENCES_KEY],
-                                        dtype=float,
-                                    ),
-                                    dtype=torch.float,
-                                    requires_grad=False,
-                                )
-                        elif encoding == TOKEN_ENCODING_STR:
-                            self.data[
-                                current_index : current_index
-                                + file_sample_quantity,
-                                :,
-                            ] = _convert_onehot_dataset_to_token(
-                                dataset, samples_key, allow_N=allow_N
-                            )
-                        elif encoding == "bpe":
-                            if tokenizer is None:
-                                raise ValueError(
-                                    "Must provide a tokenizer to to convert to BPE"
-                                )
-
-                            self.data[
-                                current_index : current_index
-                                + file_sample_quantity,
-                            ] = _convert_onehot_dataset_to_bpe(
+                        else:
+                            bpe_ids = _convert_onehot_dataset_to_bpe(
                                 dataset, tokenizer, samples_key, allow_N=allow_N
+                            )
+                        self.sequences[file_samples] = bpe_ids
+                    else:
+                        samples: h5py.Dataset = (
+                            dataset[INPUTS_STR][DNA_STR]
+                            if samples_key == INPUTS_STR
+                            else dataset[METHYLATION_STR]
+                        )
+                        # Read in blocks, so that no file is held whole.
+                        for block_start in range(
+                            0, file_sample_quantity, SEQUENCE_BATCH_SIZE
+                        ):
+                            block_stop: int = min(
+                                block_start + SEQUENCE_BATCH_SIZE,
+                                file_sample_quantity,
+                            )
+                            self.sequences[
+                                current_index + block_start : current_index
+                                + block_stop
+                            ] = torch.from_numpy(
+                                _sequence_codes(
+                                    samples[block_start:block_stop],
+                                    input_encoding,
+                                    encoding,
+                                    allow_N=allow_N,
+                                )
                             )
 
                     file_labels: torch.Tensor = torch.tensor(
@@ -527,6 +502,90 @@ def _read_h5_labels(dataset: h5py.File) -> NDArray[np.float32]:
 
     labels[labels == MISSING_LABEL] = np.nan
     return labels
+
+
+def _sequence_codes(
+    samples: NDArray,
+    input_encoding: str,
+    encoding: str,
+    *,
+    allow_N: bool = False,
+) -> NDArray[np.int8]:
+    """
+    Convert sequences read from an H5 file to the codes a dataset holds.
+
+    For one-hot encoding, the codes are nucleotide codes: A = 0, T = 1, G = 2,
+    C = 3 and -1 for an unknown nucleotide. For token encoding, they are the
+    tokens themselves: those of token-encoded files unchanged, and those of
+    one-hot encoded files as `converters.one_hot_sequence_to_integers` gives
+    them.
+
+    Args
+    ----
+    samples: The sequences, token-encoded (samples x length) or one-hot
+        encoded (samples x length x 4), with all zeros for unknown nucleotides.
+    input_encoding: The encoding of the sequences, 'token' or 'onehot'.
+    encoding: The encoding the dataset provides, 'token' or 'onehot'.
+    allow_N: Whether one-hot encoded sequences converted to tokens may hold
+        unknown nucleotides, which shifts the tokens to N = 0, A = 1, T = 2,
+        G = 3 and C = 4.
+
+    Returns
+    -------
+    The codes, one per nucleotide.
+
+    Raises
+    ------
+    ValueError if one-hot sequences are not one-hot encoded, or hold unknown
+    nucleotides that are not allowed, or tokens are not valid nucleotide codes.
+    """
+    if input_encoding == ONEHOT_ENCODING_STR:
+        improper_message: str = (
+            "Improper one-hot encoding: each nucleotide must be a one-hot "
+            "vector of length 4, or all zeros if unknown"
+        )
+        if samples.shape[-1] != converters.UNIQUE_NUCLEOTIDE_QUANTITY:
+            raise ValueError(improper_message)
+        if samples.dtype != np.int8:
+            if not np.all((samples == 0) | (samples == 1)):
+                raise ValueError(improper_message)
+            samples = samples.astype(np.int8)
+
+        # Each nucleotide's 4 bytes read as one integer, which is much faster
+        # than reducing over an axis of length 4.
+        words: NDArray[np.uint32] = np.ascontiguousarray(samples).view(
+            np.uint32
+        )[..., 0]
+        codes: NDArray[np.int8] = np.full(words.shape, -2, dtype=np.int8)
+        codes[words == 0] = -1
+        for code, word in enumerate(_ONE_HOT_WORDS):
+            codes[words == word] = code
+        if np.any(codes == -2):
+            raise ValueError(improper_message)
+
+        if encoding == TOKEN_ENCODING_STR:
+            if allow_N:
+                return codes + 1
+            if np.any(codes == -1):
+                raise ValueError(
+                    "Improper one-hot encoding: sequences hold unknown "
+                    "nucleotides, which require allow_N"
+                )
+        return codes
+
+    if encoding == ONEHOT_ENCODING_STR:
+        is_invalid: NDArray[np.bool_] = (samples < -1) | (samples > 3)
+        if is_invalid.any():
+            raise ValueError(
+                f"{samples[is_invalid][0]} is not a valid nucleotide designator"
+            )
+    elif samples.size and (
+        samples.min() < np.iinfo(np.int8).min
+        or samples.max() > np.iinfo(np.int8).max
+    ):
+        raise ValueError("Tokens must fit in 8-bit integers")
+
+    return samples.astype(np.int8)
 
 
 def _check_file_types(filepaths: Sequence[Path]) -> str:

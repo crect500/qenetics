@@ -507,14 +507,19 @@ def _prepare_training(
 
     training_dataset: data.QuantumTorchDataset = datasets.training
     validation_dataset: data.QuantumTorchDataset = datasets.validation
-    logger.debug("Training set shape %s", str(training_dataset.data.shape))
+    logger.debug(
+        "Training set shape %s", str(tuple(training_dataset.sequences.shape))
+    )
     if training_parameters.encoding in ["token", "bpe"]:
         encoding: str = "token"
     else:
         encoding = training_parameters.encoding
 
-    logger.debug("Validation set shape %s", str(validation_dataset.data.shape))
-    sequence_length: int = training_dataset.data.shape[1]
+    logger.debug(
+        "Validation set shape %s",
+        str(tuple(validation_dataset.sequences.shape)),
+    )
+    sequence_length: int = training_dataset.sequence_length
     output_shape: int = training_dataset.experiment_quantity
     model: qcpg_models.QNN | DistributedDataParallel = qcpg_models.QNN(
         sequence_length,

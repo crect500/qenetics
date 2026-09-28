@@ -5,6 +5,7 @@ from unittest import mock
 import h5py
 import numpy as np
 import pytest
+import torch
 from torch import Tensor
 from torch.utils.data import DataLoader
 from transformers import AutoTokenizer
@@ -22,7 +23,8 @@ def test_QuantumTorchDataset(
     ]
     # The files mark 8 unobserved labels each with -1, which are read as NaN.
     dataset = data.QuantumTorchDataset(test_files, allow_N=True)
-    assert dataset.data.shape == (16, 10)
+    samples, _ = dataset[:]
+    assert samples.shape == (16, 10)
     assert dataset.labels.shape == (16, 4)
     assert dataset.labels.isnan().sum() == 16
     assert dataset.labels.nansum() == 24
@@ -30,8 +32,13 @@ def test_QuantumTorchDataset(
     dataset = data.QuantumTorchDataset(
         test_files, encoding=data.ONEHOT_ENCODING_STR, allow_N=True
     )
-    assert dataset.data.shape == (16, 10, 4)
-    assert dataset.data.sum() == 128.0
+    samples, _ = dataset[:]
+    assert samples.shape == (16, 10, 4)
+    assert samples.dtype == torch.float
+    assert samples.sum() == 128.0
+    # Held as one nucleotide code per byte, not as the float encoding.
+    assert dataset.sequences.shape == (16, 10)
+    assert dataset.sequences.dtype == torch.int8
     assert dataset.labels.shape == (16, 4)
     assert dataset.labels.isnan().sum() == 16
     assert dataset.labels.nansum() == 24
@@ -42,26 +49,176 @@ def test_QuantumTorchDataset(
         tokenizer=grover_tokenizer,
         allow_N=True,
     )
-    assert dataset.data.shape == (16, 10)
+    samples, _ = dataset[:]
+    assert samples.shape == (16, 10)
 
     dataset = data.QuantumTorchDataset(
         [test_methylation_h5_file, test_methylation_h5_file]
     )
-    assert dataset.data.shape == (8, 8)
+    samples, _ = dataset[:]
+    assert samples.shape == (8, 8)
 
     dataset = data.QuantumTorchDataset(
         [test_methylation_h5_file, test_methylation_h5_file],
         encoding=data.ONEHOT_ENCODING_STR,
     )
-    assert dataset.data.shape == (8, 8, 4)
-    assert dataset.data.sum() == 64.0
+    samples, _ = dataset[:]
+    assert samples.shape == (8, 8, 4)
+    assert samples.sum() == 64.0
 
     dataset = data.QuantumTorchDataset(
         [test_methylation_h5_file, test_methylation_h5_file],
         encoding=data.BPE_ENCODING_STR,
         tokenizer=grover_tokenizer,
     )
-    assert dataset.data.shape == (8, 8)
+    samples, _ = dataset[:]
+    assert samples.shape == (8, 8)
+
+
+def test_QuantumTorchDataset_reads_in_blocks(
+    test_qcpg_dataset_directory: Path,
+) -> None:
+    test_files: list[Path] = [
+        test_qcpg_dataset_directory / f"chr{i}.h5" for i in ["1", "2"]
+    ]
+    # Blocks of 3 split each file's 8 samples unevenly.
+    with mock.patch("qenetics.tools.data.SEQUENCE_BATCH_SIZE", 3):
+        dataset = data.QuantumTorchDataset(
+            test_files, encoding=data.ONEHOT_ENCODING_STR
+        )
+
+    file_sequences: list[np.ndarray] = []
+    for test_file in test_files:
+        with h5py.File(test_file) as fd:
+            file_sequences.append(fd[data.METHYLATION_SEQUENCES_KEY][()])
+    samples, _ = dataset[:]
+    assert torch.equal(
+        samples, torch.tensor(np.concatenate(file_sequences), dtype=torch.float)
+    )
+    assert torch.equal(dataset[5][0], samples[5])
+
+
+_ONE_HOT_SAMPLES: np.ndarray = np.array(
+    [[[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1], [0, 0, 0, 0]]],
+    dtype=np.int8,
+)
+_TOKEN_SAMPLES: np.ndarray = np.array([[0, 1, 2, 3, -1]])
+
+
+@pytest.mark.parametrize(
+    ("samples", "input_encoding", "encoding", "allow_N", "expected"),
+    [
+        (
+            _ONE_HOT_SAMPLES,
+            data.ONEHOT_ENCODING_STR,
+            data.ONEHOT_ENCODING_STR,
+            False,
+            [[0, 1, 2, 3, -1]],
+        ),
+        (
+            _ONE_HOT_SAMPLES.astype(np.int64),
+            data.ONEHOT_ENCODING_STR,
+            data.ONEHOT_ENCODING_STR,
+            False,
+            [[0, 1, 2, 3, -1]],
+        ),
+        # Tokens of one-hot sequences with unknown nucleotides start at N = 0.
+        (
+            _ONE_HOT_SAMPLES,
+            data.ONEHOT_ENCODING_STR,
+            data.TOKEN_ENCODING_STR,
+            True,
+            [[1, 2, 3, 4, 0]],
+        ),
+        (
+            _ONE_HOT_SAMPLES[:, :4],
+            data.ONEHOT_ENCODING_STR,
+            data.TOKEN_ENCODING_STR,
+            False,
+            [[0, 1, 2, 3]],
+        ),
+        (
+            _TOKEN_SAMPLES,
+            data.TOKEN_ENCODING_STR,
+            data.ONEHOT_ENCODING_STR,
+            False,
+            [[0, 1, 2, 3, -1]],
+        ),
+        (
+            _TOKEN_SAMPLES,
+            data.TOKEN_ENCODING_STR,
+            data.TOKEN_ENCODING_STR,
+            False,
+            [[0, 1, 2, 3, -1]],
+        ),
+    ],
+)
+def test_sequence_codes(
+    samples: np.ndarray,
+    input_encoding: str,
+    encoding: str,
+    allow_N: bool,
+    expected: list[list[int]],
+) -> None:
+    codes = data._sequence_codes(
+        samples, input_encoding, encoding, allow_N=allow_N
+    )
+    assert codes.dtype == np.int8
+    assert codes.tolist() == expected
+
+
+@pytest.mark.parametrize(
+    ("samples", "input_encoding", "encoding", "message"),
+    [
+        (
+            np.array([[[1, 1, 0, 0]]], dtype=np.int8),
+            data.ONEHOT_ENCODING_STR,
+            data.ONEHOT_ENCODING_STR,
+            "Improper one-hot",
+        ),
+        (
+            np.array([[[2, 0, 0, 0]]], dtype=np.int8),
+            data.ONEHOT_ENCODING_STR,
+            data.ONEHOT_ENCODING_STR,
+            "Improper one-hot",
+        ),
+        (
+            np.array([[[0.5, 0.5, 0.5, 0.5]]]),
+            data.ONEHOT_ENCODING_STR,
+            data.ONEHOT_ENCODING_STR,
+            "Improper one-hot",
+        ),
+        (
+            np.array([[[1, 0, 0]]], dtype=np.int8),
+            data.ONEHOT_ENCODING_STR,
+            data.ONEHOT_ENCODING_STR,
+            "Improper one-hot",
+        ),
+        (
+            _ONE_HOT_SAMPLES,
+            data.ONEHOT_ENCODING_STR,
+            data.TOKEN_ENCODING_STR,
+            "require allow_N",
+        ),
+        (
+            np.array([[4]]),
+            data.TOKEN_ENCODING_STR,
+            data.ONEHOT_ENCODING_STR,
+            "4 is not a valid nucleotide",
+        ),
+        (
+            np.array([[300]]),
+            data.TOKEN_ENCODING_STR,
+            data.TOKEN_ENCODING_STR,
+            "8-bit",
+        ),
+    ],
+)
+def test_sequence_codes_errors(
+    samples: np.ndarray, input_encoding: str, encoding: str, message: str
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        data._sequence_codes(samples, input_encoding, encoding)
 
 
 def test_h5_cpg_data_loader(test_qcpg_dataset_directory: Path) -> None:
@@ -805,7 +962,7 @@ def test_create_h5_dataset_from_methylation_profiles(
             [output_directory / "chr1.h5", output_directory / "chr2.h5"],
             encoding=data.ONEHOT_ENCODING_STR,
         )
-        assert dataset.data.shape[1:] == (sequence_length, 4)
+        assert dataset[0][0].shape == (sequence_length, 4)
         assert dataset.labels.shape[1] == 2
 
 
@@ -1086,7 +1243,7 @@ def test_create_h5_dataset_from_deepcpg_files(
             threshold=0.5 if binarize else -1.0,
             encoding=data.ONEHOT_ENCODING_STR,
         )
-        assert dataset.data.shape[1:] == (length, 4)
+        assert dataset[0][0].shape == (length, 4)
         assert dataset.experiment_names == kept_names
         assert dataset.chromosome_names == ["1", "2"]
 
