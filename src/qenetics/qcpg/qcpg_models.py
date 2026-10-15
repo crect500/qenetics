@@ -194,7 +194,7 @@ def calculate_address_register_size(encode_quantity: int) -> int:
     return ceil(log2(encode_quantity))
 
 
-def _sequence_amplitudes(
+def sequence_amplitudes(
     nucleotides: Tensor,
     sequence_length: int,
     address_register_size: int,
@@ -254,7 +254,7 @@ def _encode_all_nucleotides(
     nucleotides: A sequence of enum-mapped nucleotide values.
     """
     qp.AmplitudeEmbedding(
-        _sequence_amplitudes(
+        sequence_amplitudes(
             nucleotides,
             sequence_length,
             address_register_size,

@@ -16,6 +16,8 @@ dependencies=[
     "optax",
     "pennylane",
     "polars",
+    "scikit-learn",
+    "tokenizers",
     "torch",
     "transformers"
 ]
@@ -26,6 +28,9 @@ dev = [
     "mypy",
     "pytest",
     "ruff"
+]
+gpu = [
+    "pennylane-lightning-gpu"
 ]
 
 [tool.setuptools.packages.find]

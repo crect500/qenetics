@@ -1,0 +1,1707 @@
+{
+  "training_settings": {
+    "deepcpg_tail": {
+      "batch_size": 256,
+      "learning_rate_decay": 0.95,
+      "selection_metric": "mean_cell_auc",
+      "epochs": 10,
+      "patience": 2,
+      "learning_rate": 0.001,
+      "training_sample_quantity": 200000
+    },
+    "pooling_head": {
+      "batch_size": 256,
+      "learning_rate_decay": 0.95,
+      "selection_metric": "mean_cell_auc",
+      "epochs": 30,
+      "patience": 3,
+      "learning_rate": 0.003,
+      "training_sample_quantity": 200000
+    },
+    "pure_whole_model": {
+      "batch_size": 256,
+      "learning_rate_decay": 0.95,
+      "selection_metric": "mean_cell_auc",
+      "epochs": 15,
+      "patience": 3,
+      "learning_rate": 0.003,
+      "training_sample_quantity": 200000
+    },
+    "pure_slow_whole_model": {
+      "batch_size": 256,
+      "learning_rate_decay": 0.95,
+      "selection_metric": "mean_cell_auc",
+      "epochs": 6,
+      "patience": 2,
+      "minimum_improvement": 0.0005,
+      "learning_rate": 0.003,
+      "training_sample_quantity": 200000
+    },
+    "pure_long_automaton": {
+      "batch_size": 256,
+      "learning_rate_decay": 0.95,
+      "selection_metric": "mean_cell_auc",
+      "epochs": 4,
+      "patience": 2,
+      "minimum_improvement": 0.0005,
+      "learning_rate": 0.003,
+      "training_sample_quantity": 200000
+    },
+    "hybrid_whole_model": {
+      "batch_size": 256,
+      "learning_rate_decay": 0.95,
+      "selection_metric": "mean_cell_auc",
+      "epochs": 15,
+      "patience": 3,
+      "learning_rate": 0.001,
+      "training_sample_quantity": 200000
+    },
+    "global_circuit_short": {
+      "batch_size": 256,
+      "learning_rate_decay": 0.95,
+      "selection_metric": "mean_cell_auc",
+      "epochs": 6,
+      "patience": 2,
+      "minimum_improvement": 0.0005,
+      "learning_rate": 0.001,
+      "training_sample_quantity": 200000
+    },
+    "repo_qnn": {
+      "batch_size": 256,
+      "learning_rate_decay": 0.95,
+      "selection_metric": "mean_cell_auc",
+      "epochs": 6,
+      "patience": 2,
+      "minimum_improvement": 0.0005,
+      "learning_rate": 0.0001,
+      "training_sample_quantity": 200000
+    },
+    "series_1": {
+      "batch_size": 128,
+      "learning_rate": 0.001,
+      "learning_rate_decay": 0.95,
+      "selection_metric": "pooled_auc",
+      "epochs": 3
+    },
+    "series_1_two_epochs": {
+      "batch_size": 128,
+      "learning_rate": 0.001,
+      "learning_rate_decay": 0.95,
+      "selection_metric": "pooled_auc",
+      "epochs": 2
+    },
+    "series_1_four_epochs": {
+      "batch_size": 128,
+      "learning_rate": 0.001,
+      "learning_rate_decay": 0.95,
+      "selection_metric": "pooled_auc",
+      "epochs": 4
+    },
+    "series_1_repo_learning_rate": {
+      "batch_size": 128,
+      "learning_rate": 0.0001,
+      "learning_rate_decay": 0.95,
+      "selection_metric": "pooled_auc",
+      "epochs": 3
+    },
+    "series_1_low_data": {
+      "batch_size": 128,
+      "learning_rate": 0.001,
+      "learning_rate_decay": 0.95,
+      "selection_metric": "pooled_auc",
+      "epochs": 15,
+      "training_sample_quantity": 5000
+    }
+  },
+  "presets": {
+    "deepcpg_tail/Q_L1": {
+      "description": "16 bp windows in 6 qubits, 1 StronglyEntanglingLayers, 64 probabilities, affine + ReLU, DeepCpG tail",
+      "model": "filter_bank_network",
+      "options": {
+        "window_lengths": [
+          16
+        ],
+        "quantum_layer_quantity": 1
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "bases"
+    },
+    "deepcpg_tail/Q_L4": {
+      "description": "16 bp windows in 6 qubits, 4 StronglyEntanglingLayers, 64 probabilities, affine + ReLU, DeepCpG tail",
+      "model": "filter_bank_network",
+      "options": {
+        "window_lengths": [
+          16
+        ],
+        "quantum_layer_quantity": 4
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "bases"
+    },
+    "deepcpg_tail/Q_L16": {
+      "description": "16 bp windows in 6 qubits, 16 StronglyEntanglingLayers, 64 probabilities, affine + ReLU, DeepCpG tail",
+      "model": "filter_bank_network",
+      "options": {
+        "window_lengths": [
+          16
+        ],
+        "quantum_layer_quantity": 16
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "bases"
+    },
+    "deepcpg_tail/Q_L64": {
+      "description": "16 bp windows in 6 qubits, 64 StronglyEntanglingLayers, 64 probabilities, affine + ReLU, DeepCpG tail",
+      "model": "filter_bank_network",
+      "options": {
+        "window_lengths": [
+          16
+        ],
+        "quantum_layer_quantity": 64
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "bases"
+    },
+    "deepcpg_tail/Q_L128": {
+      "description": "16 bp windows in 6 qubits, 128 StronglyEntanglingLayers, 64 probabilities, affine + ReLU, DeepCpG tail",
+      "model": "filter_bank_network",
+      "options": {
+        "window_lengths": [
+          16
+        ],
+        "quantum_layer_quantity": 128
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "bases"
+    },
+    "deepcpg_tail/Q_L320": {
+      "description": "16 bp windows in 6 qubits, 320 StronglyEntanglingLayers, 64 probabilities, affine + ReLU, DeepCpG tail",
+      "model": "filter_bank_network",
+      "options": {
+        "window_lengths": [
+          16
+        ],
+        "quantum_layer_quantity": 320
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "bases"
+    },
+    "deepcpg_tail/R_L3": {
+      "description": "as Q_L with RY + CNOT only (3 layers, real amplitudes)",
+      "model": "filter_bank_network",
+      "options": {
+        "window_lengths": [
+          16
+        ],
+        "quantum_layer_quantity": 3,
+        "ansatz": "real"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "bases"
+    },
+    "deepcpg_tail/R_L12": {
+      "description": "as Q_L with RY + CNOT only (12 layers, real amplitudes)",
+      "model": "filter_bank_network",
+      "options": {
+        "window_lengths": [
+          16
+        ],
+        "quantum_layer_quantity": 12,
+        "ansatz": "real"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "bases"
+    },
+    "deepcpg_tail/R_L48": {
+      "description": "as Q_L with RY + CNOT only (48 layers, real amplitudes)",
+      "model": "filter_bank_network",
+      "options": {
+        "window_lengths": [
+          16
+        ],
+        "quantum_layer_quantity": 48,
+        "ansatz": "real"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "bases"
+    },
+    "deepcpg_tail/MKz8_L4": {
+      "description": "8 circuits (4 layers) on 16 bp windows, <Z> of each qubit, DeepCpG tail",
+      "model": "filter_bank_network",
+      "options": {
+        "window_lengths": [
+          16
+        ],
+        "quantum_layer_quantity": 4,
+        "circuit_quantity": 8,
+        "readout": "expectation"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "bases"
+    },
+    "deepcpg_tail/MKm8_L4": {
+      "description": "8 circuits (4 layers), marginal probabilities of 3 qubits, DeepCpG tail",
+      "model": "filter_bank_network",
+      "options": {
+        "window_lengths": [
+          16
+        ],
+        "quantum_layer_quantity": 4,
+        "circuit_quantity": 8,
+        "readout": "marginal",
+        "marginal_wire_quantity": 3
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "bases"
+    },
+    "deepcpg_tail/Q_w2_L4": {
+      "description": "2 bp windows in 3 qubits, 4 layers, DeepCpG tail",
+      "model": "filter_bank_network",
+      "options": {
+        "window_lengths": [
+          2
+        ],
+        "quantum_layer_quantity": 4
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "bases"
+    },
+    "deepcpg_tail/R_w2_L12": {
+      "description": "2 bp windows in 3 qubits, RY + CNOT only (12 layers), DeepCpG tail",
+      "model": "filter_bank_network",
+      "options": {
+        "window_lengths": [
+          2
+        ],
+        "quantum_layer_quantity": 12,
+        "ansatz": "real"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "bases"
+    },
+    "deepcpg_tail/Q_w4_L4": {
+      "description": "4 bp windows in 4 qubits, 4 layers, DeepCpG tail",
+      "model": "filter_bank_network",
+      "options": {
+        "window_lengths": [
+          4
+        ],
+        "quantum_layer_quantity": 4
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "bases"
+    },
+    "deepcpg_tail/Q_w4_L16": {
+      "description": "4 bp windows in 4 qubits, 16 layers, DeepCpG tail",
+      "model": "filter_bank_network",
+      "options": {
+        "window_lengths": [
+          4
+        ],
+        "quantum_layer_quantity": 16
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "bases"
+    },
+    "deepcpg_tail/R_w4_L48": {
+      "description": "4 bp windows in 4 qubits, RY + CNOT only (48 layers), DeepCpG tail",
+      "model": "filter_bank_network",
+      "options": {
+        "window_lengths": [
+          4
+        ],
+        "quantum_layer_quantity": 48,
+        "ansatz": "real"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "bases"
+    },
+    "deepcpg_tail/Q_w8_L4": {
+      "description": "8 bp windows in 5 qubits, 4 layers, DeepCpG tail",
+      "model": "filter_bank_network",
+      "options": {
+        "window_lengths": [
+          8
+        ],
+        "quantum_layer_quantity": 4
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "bases"
+    },
+    "deepcpg_tail/Q_w8_L16": {
+      "description": "8 bp windows in 5 qubits, 16 layers, DeepCpG tail",
+      "model": "filter_bank_network",
+      "options": {
+        "window_lengths": [
+          8
+        ],
+        "quantum_layer_quantity": 16
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "bases"
+    },
+    "deepcpg_tail/R_w8_L48": {
+      "description": "8 bp windows in 5 qubits, RY + CNOT only (48 layers), DeepCpG tail",
+      "model": "filter_bank_network",
+      "options": {
+        "window_lengths": [
+          8
+        ],
+        "quantum_layer_quantity": 48,
+        "ansatz": "real"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "bases"
+    },
+    "deepcpg_tail/Q_w32_L128": {
+      "description": "32 bp windows in 7 qubits, 128 layers, DeepCpG tail",
+      "model": "filter_bank_network",
+      "options": {
+        "window_lengths": [
+          32
+        ],
+        "quantum_layer_quantity": 128
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "bases"
+    },
+    "deepcpg_tail/Q_w32_L256": {
+      "description": "32 bp windows in 7 qubits, 256 layers, DeepCpG tail",
+      "model": "filter_bank_network",
+      "options": {
+        "window_lengths": [
+          32
+        ],
+        "quantum_layer_quantity": 256
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "bases"
+    },
+    "deepcpg_tail/R_w32_L128": {
+      "description": "32 bp windows in 7 qubits, RY + CNOT only (128 layers), DeepCpG tail",
+      "model": "filter_bank_network",
+      "options": {
+        "window_lengths": [
+          32
+        ],
+        "quantum_layer_quantity": 128,
+        "ansatz": "real"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "bases"
+    },
+    "deepcpg_tail/R_w32_L384": {
+      "description": "32 bp windows in 7 qubits, RY + CNOT only (384 layers), DeepCpG tail",
+      "model": "filter_bank_network",
+      "options": {
+        "window_lengths": [
+          32
+        ],
+        "quantum_layer_quantity": 384,
+        "ansatz": "real"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "bases"
+    },
+    "deepcpg_tail/Q_w32_L128_avg": {
+      "description": "Q_w32_L128 with an average pool in place of the DeepCpG tail's first max pool",
+      "model": "filter_bank_network",
+      "options": {
+        "window_lengths": [
+          32
+        ],
+        "quantum_layer_quantity": 128,
+        "first_pool": "average"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "bases"
+    },
+    "deepcpg_tail/R_w32_L128_avg": {
+      "description": "R_w32_L128 with an average pool in place of the DeepCpG tail's first max pool",
+      "model": "filter_bank_network",
+      "options": {
+        "window_lengths": [
+          32
+        ],
+        "quantum_layer_quantity": 128,
+        "ansatz": "real",
+        "first_pool": "average"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "bases"
+    },
+    "deepcpg_tail/R_w32_L384_avg": {
+      "description": "R_w32_L384 with an average pool in place of the DeepCpG tail's first max pool",
+      "model": "filter_bank_network",
+      "options": {
+        "window_lengths": [
+          32
+        ],
+        "quantum_layer_quantity": 384,
+        "ansatz": "real",
+        "first_pool": "average"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "bases"
+    },
+    "deepcpg_tail/Q_w64_L128": {
+      "description": "64 bp windows in 8 qubits, 128 layers, DeepCpG tail",
+      "model": "filter_bank_network",
+      "options": {
+        "window_lengths": [
+          64
+        ],
+        "quantum_layer_quantity": 128
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "bases"
+    },
+    "deepcpg_tail/Q_w64_L256": {
+      "description": "64 bp windows in 8 qubits, 256 layers, DeepCpG tail",
+      "model": "filter_bank_network",
+      "options": {
+        "window_lengths": [
+          64
+        ],
+        "quantum_layer_quantity": 256
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "bases"
+    },
+    "deepcpg_tail/R_w64_L128": {
+      "description": "64 bp windows in 8 qubits, RY + CNOT only (128 layers), DeepCpG tail",
+      "model": "filter_bank_network",
+      "options": {
+        "window_lengths": [
+          64
+        ],
+        "quantum_layer_quantity": 128,
+        "ansatz": "real"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "bases"
+    },
+    "deepcpg_tail/R_w64_L384": {
+      "description": "64 bp windows in 8 qubits, RY + CNOT only (384 layers), DeepCpG tail",
+      "model": "filter_bank_network",
+      "options": {
+        "window_lengths": [
+          64
+        ],
+        "quantum_layer_quantity": 384,
+        "ansatz": "real"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "bases"
+    },
+    "deepcpg_tail/Q_w64_L128_avg": {
+      "description": "Q_w64_L128 with an average pool in place of the DeepCpG tail's first max pool",
+      "model": "filter_bank_network",
+      "options": {
+        "window_lengths": [
+          64
+        ],
+        "quantum_layer_quantity": 128,
+        "first_pool": "average"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "bases"
+    },
+    "deepcpg_tail/R_w64_L128_avg": {
+      "description": "R_w64_L128 with an average pool in place of the DeepCpG tail's first max pool",
+      "model": "filter_bank_network",
+      "options": {
+        "window_lengths": [
+          64
+        ],
+        "quantum_layer_quantity": 128,
+        "ansatz": "real",
+        "first_pool": "average"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "bases"
+    },
+    "deepcpg_tail/R_w64_L384_avg": {
+      "description": "R_w64_L384 with an average pool in place of the DeepCpG tail's first max pool",
+      "model": "filter_bank_network",
+      "options": {
+        "window_lengths": [
+          64
+        ],
+        "quantum_layer_quantity": 384,
+        "ansatz": "real",
+        "first_pool": "average"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "bases"
+    },
+    "pooling_head/Q_L4": {
+      "description": "16 bp windows in 6 qubits, 4 layers, affine + ReLU, global max and mean pooling, linear output",
+      "model": "filter_bank_network",
+      "options": {
+        "window_lengths": [
+          16
+        ],
+        "quantum_layer_quantity": 4,
+        "tail": "pooling"
+      },
+      "training_settings": "pooling_head",
+      "input": "bases"
+    },
+    "pooling_head/Q_L16": {
+      "description": "16 bp windows in 6 qubits, 16 layers, affine + ReLU, global max and mean pooling, linear output",
+      "model": "filter_bank_network",
+      "options": {
+        "window_lengths": [
+          16
+        ],
+        "quantum_layer_quantity": 16,
+        "tail": "pooling"
+      },
+      "training_settings": "pooling_head",
+      "input": "bases"
+    },
+    "pooling_head/MKz8_L1": {
+      "description": "8 circuits (1 layers) on 16 bp windows, <Z> of each qubit, pooling head",
+      "model": "filter_bank_network",
+      "options": {
+        "window_lengths": [
+          16
+        ],
+        "quantum_layer_quantity": 1,
+        "circuit_quantity": 8,
+        "readout": "expectation",
+        "tail": "pooling"
+      },
+      "training_settings": "pooling_head",
+      "input": "bases"
+    },
+    "pooling_head/MKz8_L4": {
+      "description": "8 circuits (4 layers) on 16 bp windows, <Z> of each qubit, pooling head",
+      "model": "filter_bank_network",
+      "options": {
+        "window_lengths": [
+          16
+        ],
+        "quantum_layer_quantity": 4,
+        "circuit_quantity": 8,
+        "readout": "expectation",
+        "tail": "pooling"
+      },
+      "training_settings": "pooling_head",
+      "input": "bases"
+    },
+    "pooling_head/MKm8_L4": {
+      "description": "8 circuits (4 layers), marginal probabilities of 3 qubits, pooling head",
+      "model": "filter_bank_network",
+      "options": {
+        "window_lengths": [
+          16
+        ],
+        "quantum_layer_quantity": 4,
+        "circuit_quantity": 8,
+        "readout": "marginal",
+        "marginal_wire_quantity": 3,
+        "tail": "pooling"
+      },
+      "training_settings": "pooling_head",
+      "input": "bases"
+    },
+    "pooling_head/MS4_L4": {
+      "description": "multi-scale bank: circuits on 4, 8, 16 and 32 bp windows (4 layers each), 240 channels, pooling head",
+      "model": "filter_bank_network",
+      "options": {
+        "window_lengths": [
+          4,
+          8,
+          16,
+          32
+        ],
+        "quantum_layer_quantity": 4,
+        "tail": "pooling"
+      },
+      "training_settings": "pooling_head",
+      "input": "bases"
+    },
+    "pooling_head/MS4_L4_gmean": {
+      "description": "MS4_L4 with mean-only pooling",
+      "model": "filter_bank_network",
+      "options": {
+        "window_lengths": [
+          4,
+          8,
+          16,
+          32
+        ],
+        "quantum_layer_quantity": 4,
+        "tail": "pooling",
+        "pooling": "mean"
+      },
+      "training_settings": "pooling_head",
+      "input": "bases"
+    },
+    "pooling_head/MS4_L4_mix": {
+      "description": "MS4_L4 with a trained 1x1 channel mix before pooling",
+      "model": "filter_bank_network",
+      "options": {
+        "window_lengths": [
+          4,
+          8,
+          16,
+          32
+        ],
+        "quantum_layer_quantity": 4,
+        "tail": "pooling",
+        "channel_mix": true
+      },
+      "training_settings": "pooling_head",
+      "input": "bases"
+    },
+    "pooling_head/MS4_L4_ry": {
+      "description": "multi-scale bank: circuits on 4, 8, 16 and 32 bp windows (RY + CNOT only, 12 layers each), 240 channels, pooling head",
+      "model": "filter_bank_network",
+      "options": {
+        "window_lengths": [
+          4,
+          8,
+          16,
+          32
+        ],
+        "quantum_layer_quantity": 12,
+        "ansatz": "real",
+        "tail": "pooling"
+      },
+      "training_settings": "pooling_head",
+      "input": "bases"
+    },
+    "pooling_head/MS4_L4_ry_gmean": {
+      "description": "MS4_L4_ry with mean-only pooling",
+      "model": "filter_bank_network",
+      "options": {
+        "window_lengths": [
+          4,
+          8,
+          16,
+          32
+        ],
+        "quantum_layer_quantity": 12,
+        "ansatz": "real",
+        "tail": "pooling",
+        "pooling": "mean"
+      },
+      "training_settings": "pooling_head",
+      "input": "bases"
+    },
+    "pooling_head/MS4_L4_ry_mix": {
+      "description": "MS4_L4_ry with a trained 1x1 channel mix before pooling",
+      "model": "filter_bank_network",
+      "options": {
+        "window_lengths": [
+          4,
+          8,
+          16,
+          32
+        ],
+        "quantum_layer_quantity": 12,
+        "ansatz": "real",
+        "tail": "pooling",
+        "channel_mix": true
+      },
+      "training_settings": "pooling_head",
+      "input": "bases"
+    },
+    "pooling_head/MK16w4_L4": {
+      "description": "16 circuits (4 layers) on 4 bp windows, 256 channels, pooling head",
+      "model": "filter_bank_network",
+      "options": {
+        "window_lengths": [
+          4
+        ],
+        "quantum_layer_quantity": 4,
+        "circuit_quantity": 16,
+        "tail": "pooling"
+      },
+      "training_settings": "pooling_head",
+      "input": "bases"
+    },
+    "pooling_head/MK16w4_L4_ry": {
+      "description": "MK16w4_L4 with RY + CNOT only (12 layers per circuit)",
+      "model": "filter_bank_network",
+      "options": {
+        "window_lengths": [
+          4
+        ],
+        "quantum_layer_quantity": 12,
+        "ansatz": "real",
+        "circuit_quantity": 16,
+        "tail": "pooling"
+      },
+      "training_settings": "pooling_head",
+      "input": "bases"
+    },
+    "whole_model/WP_L4": {
+      "description": "pure: P(wire 0 = 1) of a 16 bp window circuit (4 layers) averaged over offsets",
+      "model": "window_average",
+      "options": {
+        "window_length": 16,
+        "quantum_layer_quantity": 4
+      },
+      "training_settings": "pure_whole_model",
+      "input": "bases"
+    },
+    "whole_model/WP_L16": {
+      "description": "pure: P(wire 0 = 1) of a 16 bp window circuit (16 layers) averaged over offsets",
+      "model": "window_average",
+      "options": {
+        "window_length": 16,
+        "quantum_layer_quantity": 16
+      },
+      "training_settings": "pure_whole_model",
+      "input": "bases"
+    },
+    "whole_model/WP_MK8": {
+      "description": "pure: P(wire 0 = 1) of a 16 bp window circuit (4 layers, 8 circuits) averaged over offsets",
+      "model": "window_average",
+      "options": {
+        "window_length": 16,
+        "quantum_layer_quantity": 4,
+        "circuit_quantity": 8
+      },
+      "training_settings": "pure_whole_model",
+      "input": "bases"
+    },
+    "whole_model/WP_w4_L4": {
+      "description": "pure: P(wire 0 = 1) of a 4 bp window circuit (4 layers) averaged over offsets",
+      "model": "window_average",
+      "options": {
+        "window_length": 4,
+        "quantum_layer_quantity": 4
+      },
+      "training_settings": "pure_whole_model",
+      "input": "bases"
+    },
+    "whole_model/WP_w8_L4": {
+      "description": "pure: P(wire 0 = 1) of a 8 bp window circuit (4 layers) averaged over offsets",
+      "model": "window_average",
+      "options": {
+        "window_length": 8,
+        "quantum_layer_quantity": 4
+      },
+      "training_settings": "pure_whole_model",
+      "input": "bases"
+    },
+    "whole_model/WP_L16_ry": {
+      "description": "pure: P(wire 0 = 1) of a 16 bp window circuit (48 RY + CNOT layers) averaged over offsets",
+      "model": "window_average",
+      "options": {
+        "window_length": 16,
+        "quantum_layer_quantity": 48,
+        "ansatz": "real"
+      },
+      "training_settings": "pure_whole_model",
+      "input": "bases"
+    },
+    "whole_model/WP_w4_L12_ry": {
+      "description": "pure: P(wire 0 = 1) of a 4 bp window circuit (12 RY + CNOT layers) averaged over offsets",
+      "model": "window_average",
+      "options": {
+        "window_length": 4,
+        "quantum_layer_quantity": 12,
+        "ansatz": "real"
+      },
+      "training_settings": "pure_whole_model",
+      "input": "bases"
+    },
+    "whole_model/WP_w8_L12_ry": {
+      "description": "pure: P(wire 0 = 1) of a 8 bp window circuit (12 RY + CNOT layers) averaged over offsets",
+      "model": "window_average",
+      "options": {
+        "window_length": 8,
+        "quantum_layer_quantity": 12,
+        "ansatz": "real"
+      },
+      "training_settings": "pure_whole_model",
+      "input": "bases"
+    },
+    "whole_model/FA_L12": {
+      "description": "pure: 44 sequence statistics amplitude-encoded in 6 qubits, 12 layers, P(wire 0 = 1)",
+      "model": "feature_amplitude",
+      "options": {
+        "quantum_layer_quantity": 12
+      },
+      "training_settings": "pure_whole_model",
+      "input": "bases"
+    },
+    "whole_model/FA_L24": {
+      "description": "pure: 44 sequence statistics amplitude-encoded in 6 qubits, 24 layers, P(wire 0 = 1)",
+      "model": "feature_amplitude",
+      "options": {
+        "quantum_layer_quantity": 24
+      },
+      "training_settings": "pure_whole_model",
+      "input": "bases"
+    },
+    "whole_model/FA_L24_ry": {
+      "description": "pure: 44 sequence statistics amplitude-encoded in 6 qubits, 72 RY + CNOT layers, P(wire 0 = 1)",
+      "model": "feature_amplitude",
+      "options": {
+        "quantum_layer_quantity": 72,
+        "ansatz": "real"
+      },
+      "training_settings": "pure_whole_model",
+      "input": "bases"
+    },
+    "whole_model/AU_w101_L3": {
+      "description": "pure: quantum automaton over the central 101 bp, 3-layer blocks",
+      "model": "automaton",
+      "options": {
+        "width": 101,
+        "quantum_layer_quantity": 3
+      },
+      "training_settings": "pure_slow_whole_model",
+      "input": "bases"
+    },
+    "whole_model/AU_w201_L2": {
+      "description": "pure: quantum automaton over the central 201 bp, 2-layer blocks",
+      "model": "automaton",
+      "options": {
+        "width": 201,
+        "quantum_layer_quantity": 2
+      },
+      "training_settings": "pure_long_automaton",
+      "input": "bases"
+    },
+    "whole_model/GP_basic_L5": {
+      "description": "pure: 1001 bp in 10 address + 2 data qubits, 5 basic layers, P(wire 0 = 1)",
+      "model": "global_circuit",
+      "options": {
+        "ansatz": "basic",
+        "quantum_layer_quantity": 5,
+        "head": "pure"
+      },
+      "training_settings": "pure_slow_whole_model",
+      "input": "bases"
+    },
+    "whole_model/GP_basic_L5_w10": {
+      "description": "pure: 1001 bp in 10 address + 2 data qubits, 5 basic layers, P(wire 10 = 1)",
+      "model": "global_circuit",
+      "options": {
+        "ansatz": "basic",
+        "quantum_layer_quantity": 5,
+        "head": "pure",
+        "readout_wires": [
+          10
+        ]
+      },
+      "training_settings": "pure_slow_whole_model",
+      "input": "bases"
+    },
+    "whole_model/GP_strong_L8": {
+      "description": "pure: 1001 bp in 10 address + 2 data qubits, 8 strong layers, P(wire 0 = 1)",
+      "model": "global_circuit",
+      "options": {
+        "ansatz": "strong",
+        "quantum_layer_quantity": 8,
+        "head": "pure"
+      },
+      "training_settings": "pure_slow_whole_model",
+      "input": "bases"
+    },
+    "whole_model/GP_strong_L8_w10": {
+      "description": "pure: 1001 bp in 10 address + 2 data qubits, 8 strong layers, P(wire 10 = 1)",
+      "model": "global_circuit",
+      "options": {
+        "ansatz": "strong",
+        "quantum_layer_quantity": 8,
+        "head": "pure",
+        "readout_wires": [
+          10
+        ]
+      },
+      "training_settings": "pure_slow_whole_model",
+      "input": "bases"
+    },
+    "whole_model/G0_repo": {
+      "description": "qcpg_models.QNN as configured: BasicEntanglerLayers (5), uniform initial angles, probabilities x 4096 into a linear layer",
+      "model": "global_circuit",
+      "options": {
+        "initialization": "uniform",
+        "feature_scale": "repo"
+      },
+      "training_settings": "repo_qnn",
+      "input": "bases"
+    },
+    "whole_model/G1_lin": {
+      "description": "global 12-qubit circuit (5 basic layers), small initial angles, normalized probabilities into a linear layer",
+      "model": "global_circuit",
+      "options": {
+        "ansatz": "basic",
+        "quantum_layer_quantity": 5
+      },
+      "training_settings": "global_circuit_short",
+      "input": "bases"
+    },
+    "whole_model/G1_lin_ry": {
+      "description": "global 12-qubit circuit (5 basic_ry layers), small initial angles, normalized probabilities into a linear layer",
+      "model": "global_circuit",
+      "options": {
+        "ansatz": "basic_ry",
+        "quantum_layer_quantity": 5
+      },
+      "training_settings": "hybrid_whole_model",
+      "input": "bases"
+    },
+    "whole_model/G1_lin_ry6": {
+      "description": "global 12-qubit circuit (5 basic_ry layers), small initial angles, normalized probabilities into a linear layer",
+      "model": "global_circuit",
+      "options": {
+        "ansatz": "basic_ry",
+        "quantum_layer_quantity": 5
+      },
+      "training_settings": "global_circuit_short",
+      "input": "bases"
+    },
+    "whole_model/G1_lin_ryz": {
+      "description": "global 12-qubit circuit (5 basic_rzy layers), small initial angles, normalized probabilities into a linear layer",
+      "model": "global_circuit",
+      "options": {
+        "ansatz": "basic_rzy",
+        "quantum_layer_quantity": 5
+      },
+      "training_settings": "global_circuit_short",
+      "input": "bases"
+    },
+    "whole_model/G3_mlp": {
+      "description": "global 12-qubit circuit (5 basic layers), small initial angles, normalized probabilities into an MLP",
+      "model": "global_circuit",
+      "options": {
+        "ansatz": "basic",
+        "quantum_layer_quantity": 5,
+        "hidden_layer_sizes": [
+          128
+        ]
+      },
+      "training_settings": "global_circuit_short",
+      "input": "bases"
+    },
+    "whole_model/G3_mlp_ry": {
+      "description": "global 12-qubit circuit (5 basic_ry layers), small initial angles, normalized probabilities into an MLP",
+      "model": "global_circuit",
+      "options": {
+        "ansatz": "basic_ry",
+        "quantum_layer_quantity": 5,
+        "hidden_layer_sizes": [
+          128
+        ]
+      },
+      "training_settings": "global_circuit_short",
+      "input": "bases"
+    },
+    "whole_model/G3_mlp_ryz": {
+      "description": "global 12-qubit circuit (5 basic_rzy layers), small initial angles, normalized probabilities into an MLP",
+      "model": "global_circuit",
+      "options": {
+        "ansatz": "basic_rzy",
+        "quantum_layer_quantity": 5,
+        "hidden_layer_sizes": [
+          128
+        ]
+      },
+      "training_settings": "global_circuit_short",
+      "input": "bases"
+    },
+    "whole_model/G3s_L22": {
+      "description": "global 12-qubit circuit (22 strong layers), small initial angles, normalized probabilities into an MLP",
+      "model": "global_circuit",
+      "options": {
+        "ansatz": "strong",
+        "quantum_layer_quantity": 22,
+        "hidden_layer_sizes": [
+          128
+        ]
+      },
+      "training_settings": "hybrid_whole_model",
+      "input": "bases"
+    },
+    "whole_model/G3s_L88": {
+      "description": "global 12-qubit circuit (88 strong layers), small initial angles, normalized probabilities into an MLP",
+      "model": "global_circuit",
+      "options": {
+        "ansatz": "strong",
+        "quantum_layer_quantity": 88,
+        "hidden_layer_sizes": [
+          128
+        ]
+      },
+      "training_settings": "hybrid_whole_model",
+      "input": "bases"
+    },
+    "whole_model/H1_cnnq": {
+      "description": "DeepCpG's CNN, the same 8 angles ((pi/2) tanh) uploaded 3 times before 2-layer StronglyEntanglingLayers blocks; collapsed in training",
+      "model": "cnn_quantum_head",
+      "options": {
+        "separate_angles": false
+      },
+      "training_settings": "hybrid_whole_model",
+      "input": "bases"
+    },
+    "whole_model/H1b_cnnq": {
+      "description": "DeepCpG's CNN, 24 angles (pi tanh) uploaded 3 times before 2-layer StronglyEntanglingLayers blocks, P(wire c mod 8 = 1)",
+      "model": "cnn_quantum_head",
+      "options": {},
+      "training_settings": "hybrid_whole_model",
+      "input": "bases"
+    },
+    "whole_model/H1b_cnnq_ry": {
+      "description": "H1b_cnnq with RY + CNOT blocks (6 layers each, real amplitudes)",
+      "model": "cnn_quantum_head",
+      "options": {
+        "ansatz": "real",
+        "quantum_layer_quantity": 6
+      },
+      "training_settings": "hybrid_whole_model",
+      "input": "bases"
+    },
+    "tokens/T64_QE_L4": {
+      "description": "cpg_bpe64 tokens: quantum token embedding (|U[:, t]|^2 in 6 qubits), 4 layers, DeepCpG tail",
+      "model": "filter_bank_network",
+      "options": {
+        "window_lengths": [
+          1
+        ],
+        "quantum_layer_quantity": 4
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "cpg_bpe64"
+    },
+    "tokens/T64_RE_L12": {
+      "description": "cpg_bpe64 tokens: quantum token embedding (|U[:, t]|^2 in 6 qubits), 12 RY + CNOT layers, DeepCpG tail",
+      "model": "filter_bank_network",
+      "options": {
+        "window_lengths": [
+          1
+        ],
+        "quantum_layer_quantity": 12,
+        "ansatz": "real"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "cpg_bpe64"
+    },
+    "tokens/T64_QE_L16": {
+      "description": "cpg_bpe64 tokens: quantum token embedding (|U[:, t]|^2 in 6 qubits), 16 layers, DeepCpG tail",
+      "model": "filter_bank_network",
+      "options": {
+        "window_lengths": [
+          1
+        ],
+        "quantum_layer_quantity": 16
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "cpg_bpe64"
+    },
+    "tokens/T64_QE_L64": {
+      "description": "cpg_bpe64 tokens: quantum token embedding (|U[:, t]|^2 in 6 qubits), 64 layers, DeepCpG tail",
+      "model": "filter_bank_network",
+      "options": {
+        "window_lengths": [
+          1
+        ],
+        "quantum_layer_quantity": 64
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "cpg_bpe64"
+    },
+    "tokens/T64_Qw2_L4": {
+      "description": "cpg_bpe64 tokens: circuit on windows of 2 tokens, 4 layers, DeepCpG tail",
+      "model": "filter_bank_network",
+      "options": {
+        "window_lengths": [
+          2
+        ],
+        "quantum_layer_quantity": 4
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "cpg_bpe64"
+    },
+    "tokens/T64_Qw2_L32": {
+      "description": "cpg_bpe64 tokens: circuit on windows of 2 tokens, 32 layers, DeepCpG tail",
+      "model": "filter_bank_network",
+      "options": {
+        "window_lengths": [
+          2
+        ],
+        "quantum_layer_quantity": 32
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "cpg_bpe64"
+    },
+    "tokens/T64_Rw2_L12": {
+      "description": "cpg_bpe64 tokens: circuit on windows of 2 tokens, 12 RY + CNOT layers, DeepCpG tail",
+      "model": "filter_bank_network",
+      "options": {
+        "window_lengths": [
+          2
+        ],
+        "quantum_layer_quantity": 12,
+        "ansatz": "real"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "cpg_bpe64"
+    },
+    "tokens/T64_Qw4_L16": {
+      "description": "cpg_bpe64 tokens: circuit on windows of 4 tokens, 16 layers, DeepCpG tail",
+      "model": "filter_bank_network",
+      "options": {
+        "window_lengths": [
+          4
+        ],
+        "quantum_layer_quantity": 16
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "cpg_bpe64"
+    },
+    "tokens/T64_Qw4_L64": {
+      "description": "cpg_bpe64 tokens: circuit on windows of 4 tokens, 64 layers, DeepCpG tail",
+      "model": "filter_bank_network",
+      "options": {
+        "window_lengths": [
+          4
+        ],
+        "quantum_layer_quantity": 64
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "cpg_bpe64"
+    },
+    "tokens/T64_Qw8_L16": {
+      "description": "cpg_bpe64 tokens: circuit on windows of 8 tokens, 16 layers, DeepCpG tail",
+      "model": "filter_bank_network",
+      "options": {
+        "window_lengths": [
+          8
+        ],
+        "quantum_layer_quantity": 16
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "cpg_bpe64"
+    },
+    "tokens/T256_QE_L4": {
+      "description": "cpg_bpe256 tokens: quantum token embedding (|U[:, t]|^2 in 8 qubits), 4 layers, DeepCpG tail",
+      "model": "filter_bank_network",
+      "options": {
+        "window_lengths": [
+          1
+        ],
+        "quantum_layer_quantity": 4
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "cpg_bpe256"
+    },
+    "tokens/T256_RE_L12": {
+      "description": "cpg_bpe256 tokens: quantum token embedding (|U[:, t]|^2 in 8 qubits), 12 RY + CNOT layers, DeepCpG tail",
+      "model": "filter_bank_network",
+      "options": {
+        "window_lengths": [
+          1
+        ],
+        "quantum_layer_quantity": 12,
+        "ansatz": "real"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "cpg_bpe256"
+    },
+    "tokens/T256_QE_L64": {
+      "description": "cpg_bpe256 tokens: quantum token embedding (|U[:, t]|^2 in 8 qubits), 64 layers, DeepCpG tail",
+      "model": "filter_bank_network",
+      "options": {
+        "window_lengths": [
+          1
+        ],
+        "quantum_layer_quantity": 64
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "cpg_bpe256"
+    },
+    "tokens/K3_QE_L4": {
+      "description": "cpg_kmer3 tokens: quantum token embedding (|U[:, t]|^2 in 6 qubits), 4 layers, DeepCpG tail",
+      "model": "filter_bank_network",
+      "options": {
+        "window_lengths": [
+          1
+        ],
+        "quantum_layer_quantity": 4
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "cpg_kmer3"
+    },
+    "tokens/K3_RE_L12": {
+      "description": "cpg_kmer3 tokens: quantum token embedding (|U[:, t]|^2 in 6 qubits), 12 RY + CNOT layers, DeepCpG tail",
+      "model": "filter_bank_network",
+      "options": {
+        "window_lengths": [
+          1
+        ],
+        "quantum_layer_quantity": 12,
+        "ansatz": "real"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "cpg_kmer3"
+    },
+    "tokens/K3_QE_L16": {
+      "description": "cpg_kmer3 tokens: quantum token embedding (|U[:, t]|^2 in 6 qubits), 16 layers, DeepCpG tail",
+      "model": "filter_bank_network",
+      "options": {
+        "window_lengths": [
+          1
+        ],
+        "quantum_layer_quantity": 16
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "cpg_kmer3"
+    },
+    "tokens/K3_Qw2_L4": {
+      "description": "cpg_kmer3 tokens: circuit on windows of 2 tokens, 4 layers, DeepCpG tail",
+      "model": "filter_bank_network",
+      "options": {
+        "window_lengths": [
+          2
+        ],
+        "quantum_layer_quantity": 4
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "cpg_kmer3"
+    },
+    "tokens/K3_Rw2_L12": {
+      "description": "cpg_kmer3 tokens: circuit on windows of 2 tokens, 12 RY + CNOT layers, DeepCpG tail",
+      "model": "filter_bank_network",
+      "options": {
+        "window_lengths": [
+          2
+        ],
+        "quantum_layer_quantity": 12,
+        "ansatz": "real"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "cpg_kmer3"
+    },
+    "tokens/K4_QE_L4": {
+      "description": "cpg_kmer4 tokens: quantum token embedding (|U[:, t]|^2 in 8 qubits), 4 layers, DeepCpG tail",
+      "model": "filter_bank_network",
+      "options": {
+        "window_lengths": [
+          1
+        ],
+        "quantum_layer_quantity": 4
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "cpg_kmer4"
+    },
+    "tokens/K4_RE_L12": {
+      "description": "cpg_kmer4 tokens: quantum token embedding (|U[:, t]|^2 in 8 qubits), 12 RY + CNOT layers, DeepCpG tail",
+      "model": "filter_bank_network",
+      "options": {
+        "window_lengths": [
+          1
+        ],
+        "quantum_layer_quantity": 12,
+        "ansatz": "real"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "cpg_kmer4"
+    },
+    "tokens/P64_QE_L4": {
+      "description": "base-aligned BPE tokens (V = 64): token embedding at every bp, 4 layers, DeepCpG tail",
+      "model": "filter_bank_network",
+      "options": {
+        "window_lengths": [
+          1
+        ],
+        "quantum_layer_quantity": 4
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "painted64"
+    },
+    "tokens/P64b_QE_L4": {
+      "description": "base + base-aligned BPE token (V = 64) in 7 qubits, 4 layers, DeepCpG tail",
+      "model": "filter_bank_network",
+      "options": {
+        "window_lengths": [
+          1
+        ],
+        "quantum_layer_quantity": 4
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "painted_bases64"
+    },
+    "tokens/P64b_RE_L12": {
+      "description": "base + base-aligned BPE token (V = 64) in 7 qubits, 12 RY + CNOT layers, DeepCpG tail",
+      "model": "filter_bank_network",
+      "options": {
+        "window_lengths": [
+          1
+        ],
+        "quantum_layer_quantity": 12,
+        "ansatz": "real"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "painted_bases64"
+    },
+    "tokens/WT64_L4": {
+      "description": "pure: P(wire 0 = 1) of a circuit on 1-token windows (4 layers) averaged over the 257 token positions",
+      "model": "window_average",
+      "options": {
+        "window_length": 1,
+        "quantum_layer_quantity": 4
+      },
+      "training_settings": "pure_whole_model",
+      "input": "cpg_bpe64"
+    },
+    "tokens/WT64_L12_ry": {
+      "description": "pure: P(wire 0 = 1) of a circuit on 1-token windows (12 RY + CNOT layers) averaged over the 257 token positions",
+      "model": "window_average",
+      "options": {
+        "window_length": 1,
+        "quantum_layer_quantity": 12,
+        "ansatz": "real"
+      },
+      "training_settings": "pure_whole_model",
+      "input": "cpg_bpe64"
+    },
+    "tokens/WT64w2_L4": {
+      "description": "pure: P(wire 0 = 1) of a circuit on 2-token windows (4 layers) averaged over the 257 token positions",
+      "model": "window_average",
+      "options": {
+        "window_length": 2,
+        "quantum_layer_quantity": 4
+      },
+      "training_settings": "pure_whole_model",
+      "input": "cpg_bpe64"
+    },
+    "tokens/WT64w2_L12_ry": {
+      "description": "pure: P(wire 0 = 1) of a circuit on 2-token windows (12 RY + CNOT layers) averaged over the 257 token positions",
+      "model": "window_average",
+      "options": {
+        "window_length": 2,
+        "quantum_layer_quantity": 12,
+        "ansatz": "real"
+      },
+      "training_settings": "pure_whole_model",
+      "input": "cpg_bpe64"
+    },
+    "tokens/H1b_T64": {
+      "description": "H1b_cnnq on one-hot BPE tokens (V = 64)",
+      "model": "cnn_quantum_head",
+      "options": {},
+      "training_settings": "hybrid_whole_model",
+      "input": "cpg_bpe64"
+    },
+    "tokens/H1b_T64_ry": {
+      "description": "H1b_T64 with RY + CNOT blocks (6 layers each)",
+      "model": "cnn_quantum_head",
+      "options": {
+        "ansatz": "real",
+        "quantum_layer_quantity": 6
+      },
+      "training_settings": "hybrid_whole_model",
+      "input": "cpg_bpe64"
+    },
+    "series_1/FA1": {
+      "description": "44 statistics amplitude-encoded in 6 qubits, 6 layers, shared readout",
+      "model": "feature_amplitude",
+      "options": {
+        "quantum_layer_quantity": 6
+      },
+      "training_settings": "series_1",
+      "input": "bases"
+    },
+    "series_1/FA2": {
+      "description": "as FA1 with 12 layers",
+      "model": "feature_amplitude",
+      "options": {
+        "quantum_layer_quantity": 12
+      },
+      "training_settings": "series_1",
+      "input": "bases"
+    },
+    "series_1/WP1": {
+      "description": "window-averaged 16 bp circuit, 4 layers, one readout wire per cell",
+      "model": "window_average",
+      "options": {
+        "readout_wires": "per_output"
+      },
+      "training_settings": "series_1",
+      "input": "bases"
+    },
+    "series_1/WP2": {
+      "description": "as WP1 over the central 201 bp",
+      "model": "window_average",
+      "options": {
+        "readout_wires": "per_output",
+        "centre_length": 201
+      },
+      "training_settings": "series_1",
+      "input": "bases"
+    },
+    "series_1/WP1sh": {
+      "description": "window-averaged 16 bp circuit, 4 layers, shared readout wire",
+      "model": "window_average",
+      "options": {},
+      "training_settings": "series_1",
+      "input": "bases"
+    },
+    "series_1/WP2sh": {
+      "description": "as WP1sh over the central 201 bp",
+      "model": "window_average",
+      "options": {
+        "centre_length": 201
+      },
+      "training_settings": "series_1",
+      "input": "bases"
+    },
+    "series_1/WP1shL8": {
+      "description": "as WP1sh with 8 layers",
+      "model": "window_average",
+      "options": {
+        "quantum_layer_quantity": 8
+      },
+      "training_settings": "series_1",
+      "input": "bases"
+    },
+    "series_1/A1": {
+      "description": "quantum automaton over the central 201 bp, 2-layer blocks, one readout wire per cell",
+      "model": "automaton",
+      "options": {
+        "width": 201,
+        "quantum_layer_quantity": 2,
+        "readout_wires": "per_output"
+      },
+      "training_settings": "series_1_two_epochs",
+      "input": "bases"
+    },
+    "series_1/A2": {
+      "description": "quantum automaton over the central 101 bp, 3-layer blocks, one readout wire per cell",
+      "model": "automaton",
+      "options": {
+        "width": 101,
+        "quantum_layer_quantity": 3,
+        "readout_wires": "per_output"
+      },
+      "training_settings": "series_1",
+      "input": "bases"
+    },
+    "series_1/P5": {
+      "description": "44 statistics angle-encoded with re-uploading on 8 qubits, 2 layers per block",
+      "model": "feature_reuploading",
+      "options": {},
+      "training_settings": "series_1",
+      "input": "bases"
+    },
+    "series_1/Q1": {
+      "description": "16 bp quantum filter bank (4 layers), DeepCpG tail",
+      "model": "filter_bank_network",
+      "options": {
+        "window_lengths": [
+          16
+        ],
+        "quantum_layer_quantity": 4,
+        "activation": "none"
+      },
+      "training_settings": "series_1",
+      "input": "bases"
+    },
+    "series_1/QA1": {
+      "description": "as Q1 with per-channel affine + ReLU",
+      "model": "filter_bank_network",
+      "options": {
+        "window_lengths": [
+          16
+        ],
+        "quantum_layer_quantity": 4
+      },
+      "training_settings": "series_1",
+      "input": "bases"
+    },
+    "series_1/QA2": {
+      "description": "two 11 bp quantum filter banks with affine + ReLU",
+      "model": "filter_bank_network",
+      "options": {
+        "window_lengths": [
+          11
+        ],
+        "quantum_layer_quantity": 4,
+        "circuit_quantity": 2
+      },
+      "training_settings": "series_1",
+      "input": "bases"
+    },
+    "series_1/QS16": {
+      "description": "as QA1 with 16 layers",
+      "model": "filter_bank_network",
+      "options": {
+        "window_lengths": [
+          16
+        ],
+        "quantum_layer_quantity": 16
+      },
+      "training_settings": "series_1",
+      "input": "bases"
+    },
+    "series_1/QS64": {
+      "description": "as QA1 with 64 layers",
+      "model": "filter_bank_network",
+      "options": {
+        "window_lengths": [
+          16
+        ],
+        "quantum_layer_quantity": 64
+      },
+      "training_settings": "series_1",
+      "input": "bases"
+    },
+    "series_1/QB1": {
+      "description": "15 bp filter bank with a constant amplitude block, DeepCpG tail",
+      "model": "filter_bank_network",
+      "options": {
+        "window_lengths": [
+          15
+        ],
+        "quantum_layer_quantity": 4,
+        "constant_amplitude": 1.0,
+        "activation": "none"
+      },
+      "training_settings": "series_1",
+      "input": "bases"
+    },
+    "series_1/QB2": {
+      "description": "as QB1 with affine + ReLU",
+      "model": "filter_bank_network",
+      "options": {
+        "window_lengths": [
+          15
+        ],
+        "quantum_layer_quantity": 4,
+        "constant_amplitude": 1.0
+      },
+      "training_settings": "series_1",
+      "input": "bases"
+    },
+    "series_1/K1": {
+      "description": "Q1 with the circuit frozen at uniform random angles",
+      "model": "filter_bank_network",
+      "options": {
+        "window_lengths": [
+          16
+        ],
+        "quantum_layer_quantity": 4,
+        "activation": "none",
+        "trainable_circuit": false,
+        "initialization": "uniform"
+      },
+      "training_settings": "series_1",
+      "input": "bases"
+    },
+    "series_1/FQ3": {
+      "description": "16 bp filter bank, then a second quantum filter bank in place of DeepCpG's second convolution",
+      "model": "filter_bank_network",
+      "options": {
+        "window_lengths": [
+          16
+        ],
+        "quantum_layer_quantity": 4,
+        "activation": "none",
+        "tail": "quantum_filter_bank"
+      },
+      "training_settings": "series_1",
+      "input": "bases"
+    },
+    "series_1/LD5k_Q1": {
+      "description": "Q1 trained on 5,000 sites",
+      "model": "filter_bank_network",
+      "options": {
+        "window_lengths": [
+          16
+        ],
+        "quantum_layer_quantity": 4,
+        "activation": "none"
+      },
+      "training_settings": "series_1_low_data",
+      "input": "bases"
+    },
+    "series_1/H1": {
+      "description": "DeepCpG's CNN with an 8-qubit angle re-uploading circuit as the output layer",
+      "model": "cnn_quantum_head",
+      "options": {},
+      "training_settings": "series_1",
+      "input": "bases"
+    },
+    "series_1/G0": {
+      "description": "qcpg_models.QNN: BasicEntanglerLayers (5), uniform angles, probabilities x 4096 into a linear layer",
+      "model": "global_circuit",
+      "options": {
+        "initialization": "uniform",
+        "feature_scale": "repo"
+      },
+      "training_settings": "series_1_repo_learning_rate",
+      "input": "bases"
+    },
+    "series_1/G1": {
+      "description": "the global QNN with small angles and normalized features, linear layer",
+      "model": "global_circuit",
+      "options": {},
+      "training_settings": "series_1",
+      "input": "bases"
+    },
+    "series_1/G3": {
+      "description": "as G1 with an MLP head",
+      "model": "global_circuit",
+      "options": {
+        "hidden_layer_sizes": [
+          128
+        ]
+      },
+      "training_settings": "series_1",
+      "input": "bases"
+    },
+    "series_1/G4": {
+      "description": "as G1 with the repo's feature scale and learning rate",
+      "model": "global_circuit",
+      "options": {
+        "feature_scale": "repo"
+      },
+      "training_settings": "series_1_repo_learning_rate",
+      "input": "bases"
+    },
+    "series_1/L1": {
+      "description": "block-local QNN: one 6-qubit unitary (6 layers) on every aligned 16 bp block, read from offsets 0 and 8, linear head",
+      "model": "global_circuit",
+      "options": {
+        "ansatz": "strong",
+        "quantum_layer_quantity": 6,
+        "block_qubit_quantity": 6,
+        "shifts": [
+          0,
+          8
+        ]
+      },
+      "training_settings": "series_1_four_epochs",
+      "input": "bases"
+    },
+    "series_1/L2": {
+      "description": "as L1 with an MLP head",
+      "model": "global_circuit",
+      "options": {
+        "ansatz": "strong",
+        "quantum_layer_quantity": 6,
+        "block_qubit_quantity": 6,
+        "shifts": [
+          0,
+          8
+        ],
+        "hidden_layer_sizes": [
+          128
+        ]
+      },
+      "training_settings": "series_1_four_epochs",
+      "input": "bases"
+    }
+  }
+}

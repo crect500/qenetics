@@ -3,6 +3,7 @@ import os
 import socket
 from dataclasses import dataclass, field, fields
 from pathlib import Path
+from typing import Any
 
 import jax
 import numpy as np
@@ -15,17 +16,33 @@ from numpy.typing import NDArray
 from torch import Tensor, nn, optim
 from torch.distributed import destroy_process_group, init_process_group
 from torch.nn.parallel import DistributedDataParallel
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Dataset, Subset
 from torch.utils.data.distributed import DistributedSampler
 from transformers import AutoTokenizer
 
-from qenetics.qcpg import qcpg_models, records
-from qenetics.tools import data, dna, metrics, report
+from qenetics.qcpg import model_factory, qcpg_models, records
+from qenetics.tools import (
+    converters,
+    data,
+    dna,
+    metrics,
+    report,
+    tokenization,
+)
 
 logger = logging.getLogger(__name__)
 
 # The cell name recorded for labels stored as a single unnamed dataset.
 UNNAMED_EXPERIMENT: str = "unnamed"
+QNN_MODEL: str = "qnn"
+MEAN_CELL_AUC: str = "mean_cell_auc"
+POOLED_AUC: str = "pooled_auc"
+SELECTION_METRICS: tuple[str, ...] = (MEAN_CELL_AUC, POOLED_AUC)
+# The seed of the fixed training subset, independent of the run's seed, so
+# that runs of every seed see the same sites.
+TRAINING_SUBSET_SEED: int = 12345
+# Shot evaluations are seeded with the run's seed plus this offset.
+SHOT_SEED_OFFSET: int = 100_000
 
 
 @dataclass
@@ -64,12 +81,105 @@ class TrainingParameters:
     embedding_qubit_quantity: int | None = None
     vocabulary_size: int | None = None
     fcl_quantity: int | None = 1
-    shots: int = -1
     distributed: bool = False
     gpu_quantity: int = 0
     model_filepath: Path | None = None
     log_directory: Path | None = None
     log_level: int = logging.INFO
+    # `QNN_MODEL`, or a family of `model_factory.MODEL_FAMILIES` built with
+    # `model_options`; layer_quantity, entangler and measurement apply to
+    # `QNN_MODEL` only.
+    model: str = QNN_MODEL
+    model_options: dict[str, Any] = field(default_factory=dict)
+    # A token id that encodes as zeros, for token data without tokenization
+    # attributes.
+    padding_token: int | None = None
+    # The learning rate is multiplied by this after every epoch.
+    learning_rate_decay: float = 1.0
+    # The learning rate of circuit angles, if not `learning_rate`.
+    quantum_learning_rate: float | None = None
+    # `MEAN_CELL_AUC` or `POOLED_AUC` keeps the epoch of the best validation
+    # score; None keeps the last epoch.
+    selection_metric: str | None = None
+    # Stop after this many epochs without a validation gain above
+    # `minimum_improvement`.
+    patience: int | None = None
+    minimum_improvement: float = 0.0
+    # Train on a fixed random subset of this many training sites.
+    training_sample_quantity: int | None = None
+    seed: int | None = None
+    loader_worker_quantity: int = 0
+    # After training, also evaluate the test split with every measured
+    # probability estimated from each of these numbers of shots.
+    evaluation_shots: list[int] = field(default_factory=list)
+
+
+def check_training_parameters(training_parameters: TrainingParameters) -> None:
+    """
+    Verify the training parameters that can be checked before loading data.
+
+    Args
+    ----
+    training_parameters: The training parameters.
+
+    Raises
+    ------
+    ValueError if a parameter is invalid or does not apply to the model.
+    """
+    model: str = training_parameters.model
+    if model != QNN_MODEL and model not in model_factory.MODEL_FAMILIES:
+        raise ValueError(
+            f"Unknown model {model}; expected one of "
+            f"{', '.join((QNN_MODEL, *model_factory.MODEL_FAMILIES))}"
+        )
+    if model == QNN_MODEL and (
+        training_parameters.model_options
+        or training_parameters.quantum_learning_rate is not None
+        or training_parameters.evaluation_shots
+    ):
+        raise ValueError(
+            "Model options, a quantum learning rate and shot evaluations "
+            f"apply to the model families, not the {QNN_MODEL} model"
+        )
+    if not 0 < training_parameters.learning_rate_decay <= 1:
+        raise ValueError(
+            "The learning rate decay must be in (0, 1], not "
+            f"{training_parameters.learning_rate_decay}"
+        )
+    if (
+        training_parameters.quantum_learning_rate is not None
+        and training_parameters.quantum_learning_rate <= 0
+    ):
+        raise ValueError("The quantum learning rate must be positive")
+    if (
+        training_parameters.selection_metric is not None
+        and training_parameters.selection_metric not in SELECTION_METRICS
+    ):
+        raise ValueError(
+            f"Unknown selection metric {training_parameters.selection_metric}; "
+            f"expected one of {', '.join(SELECTION_METRICS)}"
+        )
+    if training_parameters.patience is not None:
+        if training_parameters.selection_metric is None:
+            raise ValueError("Early stopping needs a selection metric")
+        if training_parameters.patience < 1:
+            raise ValueError(
+                f"Patience must be at least 1, not {training_parameters.patience}"
+            )
+    if training_parameters.minimum_improvement < 0:
+        raise ValueError("The minimum improvement must not be negative")
+    if (
+        training_parameters.training_sample_quantity is not None
+        and training_parameters.training_sample_quantity < 1
+    ):
+        raise ValueError("The training sample quantity must be at least 1")
+    if training_parameters.loader_worker_quantity < 0:
+        raise ValueError("The loader worker quantity must not be negative")
+    if any(shots < 1 for shots in training_parameters.evaluation_shots):
+        raise ValueError(
+            "Evaluation shots must be at least 1, not "
+            f"{training_parameters.evaluation_shots}"
+        )
 
 
 def _get_free_port() -> int:
@@ -492,6 +602,137 @@ def _load_datasets(training_parameters: TrainingParameters) -> _Datasets:
     )
 
 
+def model_encoding(training_parameters: TrainingParameters) -> str:
+    """The encoding models receive: BPE tokens are token-encoded."""
+    if training_parameters.encoding in [
+        data.TOKEN_ENCODING_STR,
+        data.BPE_ENCODING_STR,
+    ]:
+        return data.TOKEN_ENCODING_STR
+
+    return training_parameters.encoding
+
+
+def build_model(
+    training_parameters: TrainingParameters,
+    sequence_length: int,
+    experiment_quantity: int,
+    token_attributes: dict[str, str | int],
+) -> model_factory.SequenceModel:
+    """
+    Build a model of `model_factory.MODEL_FAMILIES` for a dataset.
+
+    Token files written by `data.create_token_h5_dataset` define their own
+    token lookup. Other token data use `vocabulary_size`, or the four
+    nucleotide codes.
+
+    Args
+    ----
+    training_parameters: The training parameters.
+    sequence_length: The dataset's sequence length.
+    experiment_quantity: The dataset's number of experiments (cells).
+    token_attributes: The dataset's token attributes, see
+        `data.read_h5_token_attributes`.
+
+    Raises
+    ------
+    ValueError if the model's options are invalid, or a padding token is
+    given for token files that define their own.
+    """
+    encoding: str = model_encoding(training_parameters)
+    attributes: dict[str, str | int] = token_attributes
+    vocabulary_size: int | None = training_parameters.vocabulary_size
+    token_lookup: Tensor | None = None
+    if attributes:
+        if training_parameters.padding_token is not None:
+            raise ValueError(
+                "Token files of a tokenization define their own padding token"
+            )
+        token_lookup = tokenization.token_lookup(
+            str(attributes[data.TOKENIZATION_ATTRIBUTE]),
+            int(attributes[data.VOCABULARY_SIZE_ATTRIBUTE]),
+        )
+        vocabulary_size = None
+    elif encoding == data.TOKEN_ENCODING_STR and vocabulary_size is None:
+        vocabulary_size = converters.UNIQUE_NUCLEOTIDE_QUANTITY
+
+    return model_factory.build_model(
+        training_parameters.model,
+        sequence_length,
+        experiment_quantity,
+        encoding=encoding,
+        vocabulary_size=vocabulary_size,
+        padding_token=training_parameters.padding_token,
+        token_lookup=token_lookup,
+        device_name=training_parameters.device_name,
+        diff_method=training_parameters.diff_method,
+        options=training_parameters.model_options,
+    )
+
+
+def _training_subset(
+    dataset: data.QuantumTorchDataset, sample_quantity: int | None
+) -> Dataset:
+    """
+    Choose a fixed random subset of training sites.
+
+    The subset depends on `TRAINING_SUBSET_SEED` only, so runs of every seed
+    train on the same sites, and smaller subsets are not nested in larger
+    ones.
+
+    Args
+    ----
+    dataset: The training dataset.
+    sample_quantity: The size of the subset, or None for every site.
+
+    Returns
+    -------
+    The subset, or the dataset if it holds no more sites.
+    """
+    if sample_quantity is None:
+        return dataset
+
+    if sample_quantity >= len(dataset):
+        logger.warning(
+            "Requested %d training sites, but only %d exist; using all",
+            sample_quantity,
+            len(dataset),
+        )
+        return dataset
+
+    indices: NDArray[np.int64] = np.sort(
+        np.random.default_rng(TRAINING_SUBSET_SEED).permutation(len(dataset))[
+            :sample_quantity
+        ]
+    )
+    return Subset(dataset, indices.tolist())
+
+
+def _optimizer(
+    model: nn.Module, training_parameters: TrainingParameters
+) -> optim.Optimizer:
+    """Adam, with `quantum_learning_rate` for circuit angles if given."""
+    if training_parameters.quantum_learning_rate is None:
+        return optim.Adam(
+            model.parameters(), lr=training_parameters.learning_rate
+        )
+
+    is_quantum: dict[bool, list[nn.Parameter]] = {True: [], False: []}
+    for name, parameter in model.named_parameters():
+        is_quantum[
+            name.split(".")[-1] == model_factory.CIRCUIT_WEIGHTS_NAME
+        ].append(parameter)
+    groups: list[dict[str, Any]] = [{"params": is_quantum[False]}]
+    if is_quantum[True]:
+        groups.append(
+            {
+                "params": is_quantum[True],
+                "lr": training_parameters.quantum_learning_rate,
+            }
+        )
+    return optim.Adam(groups, lr=training_parameters.learning_rate)
+
+
 def _prepare_training(
     training_parameters: TrainingParameters,
     rank: int | None = None,
@@ -521,19 +762,40 @@ def _prepare_training(
     )
     sequence_length: int = training_dataset.sequence_length
     output_shape: int = training_dataset.experiment_quantity
-    model: qcpg_models.QNN | DistributedDataParallel = qcpg_models.QNN(
-        sequence_length,
-        training_parameters.layer_quantity,
-        output_shape,
-        entangling=training_parameters.entangler,
-        encoding=encoding,
-        embedding_qubit_quantity=training_parameters.embedding_qubit_quantity,
-        vocabulary_size=training_parameters.vocabulary_size,
-        fcl_quantity=training_parameters.fcl_quantity,
-        measurement=training_parameters.measurement,
-        device_name=training_parameters.device_name,
-        distribute=training_parameters.distributed,
-        diff_method=training_parameters.diff_method,
+    if training_parameters.model == QNN_MODEL:
+        model: nn.Module | DistributedDataParallel = qcpg_models.QNN(
+            sequence_length,
+            training_parameters.layer_quantity,
+            output_shape,
+            entangling=training_parameters.entangler,
+            encoding=encoding,
+            embedding_qubit_quantity=training_parameters.embedding_qubit_quantity,
+            vocabulary_size=training_parameters.vocabulary_size,
+            fcl_quantity=training_parameters.fcl_quantity,
+            measurement=training_parameters.measurement,
+            device_name=training_parameters.device_name,
+            distribute=training_parameters.distributed,
+            diff_method=training_parameters.diff_method,
+        )
+    else:
+        model = build_model(
+            training_parameters,
+            sequence_length,
+            output_shape,
+            training_dataset.token_attributes,
+        )
+        quantum_quantity, classical_quantity = model_factory.count_parameters(
+            model
+        )
+        logger.info(
+            "Built %s model with %d trained circuit angles and %d other "
+            "trained parameters",
+            training_parameters.model,
+            quantum_quantity,
+            classical_quantity,
+        )
+    training_dataset = _training_subset(
+        training_dataset, training_parameters.training_sample_quantity
     )
     if rank is not None:
         model = model.to(rank)
@@ -542,8 +804,12 @@ def _prepare_training(
             training_sampler: DistributedSampler | None = DistributedSampler(
                 training_dataset
             )
-            validation_sampler: DistributedSampler | None = DistributedSampler(
-                validation_dataset
+            # Every process scores the whole validation set when epochs are
+            # selected, so that all reach the same decisions.
+            validation_sampler: DistributedSampler | None = (
+                None
+                if training_parameters.selection_metric
+                else DistributedSampler(validation_dataset)
             )
             model = DistributedDataParallel(model, device_ids=[rank])
         else:
@@ -560,6 +826,12 @@ def _prepare_training(
         shuffle=training_sampler is None,
         sampler=training_sampler,
         pin_memory=pin_memory,
+        num_workers=training_parameters.loader_worker_quantity,
+        generator=(
+            None
+            if training_parameters.seed is None
+            else torch.Generator().manual_seed(training_parameters.seed)
+        ),
     )
     validation_loader = DataLoader(
         dataset=validation_dataset,
@@ -567,12 +839,13 @@ def _prepare_training(
         shuffle=False,
         sampler=validation_sampler,
         pin_memory=pin_memory,
+        num_workers=training_parameters.loader_worker_quantity,
     )
     return (
         training_loader,
         validation_loader,
         model,
-        optim.Adam(model.parameters(), lr=training_parameters.learning_rate),
+        _optimizer(model, training_parameters),
     )
 
 
@@ -615,6 +888,11 @@ def _train_one_epoch(
                 for parameter_vector in model.parameters()
             )
 
+        if not torch.isfinite(loss):
+            raise FloatingPointError(
+                f"Training loss is {loss.item()} at epoch {epoch}, batch "
+                f"{batch_index}"
+            )
         loss.backward()
         optimizer.step()
         accumulated_loss += loss.item()
@@ -741,6 +1019,47 @@ def _evaluate_validation_set(
     return evaluation.loss, evaluation.auc
 
 
+def _save_model(
+    model: nn.Module | DistributedDataParallel,
+    output_directory: Path,
+    training_parameters: TrainingParameters,
+    rank: int | None = None,
+) -> None:
+    """Save the model's weights; only the first of several GPUs saves."""
+    if training_parameters.gpu_quantity > 1:
+        if rank == 0:
+            torch.save(model.module.state_dict(), output_directory / "model.pt")
+    else:
+        torch.save(model.state_dict(), output_directory / "model.pt")
+
+
+def _selection_score(
+    selection_metric: str,
+    evaluation: _Evaluation,
+    cell_results: list[metrics.CellMetrics],
+) -> float:
+    """
+    Score an epoch on validation: the mean per-cell AUC over cells with both
+    classes, or the pooled AUC. NaN if undefined.
+    """
+    if selection_metric == POOLED_AUC:
+        return evaluation.auc
+
+    aucs: list[float] = [
+        cell_result.auc
+        for cell_result in cell_results
+        if not np.isnan(cell_result.auc)
+    ]
+    return float(np.mean(aucs)) if aucs else float("nan")
+
+
+def _first_rank_decisions(decisions: list[bool]) -> list[bool]:
+    """Share the first process's decisions with every distributed process."""
+    if torch.distributed.is_available() and torch.distributed.is_initialized():
+        torch.distributed.broadcast_object_list(decisions, src=0)
+    return decisions
+
+
 def _train_all_epochs(
     model: nn.Module | DistributedDataParallel,
     training_loader: DataLoader,
@@ -751,6 +1070,24 @@ def _train_all_epochs(
     rank: int | None = None,
     run_directory: Path | None = None,
 ) -> None:
+    """
+    Train for up to `epochs` epochs.
+
+    With a selection metric, the epoch of the best validation score is kept
+    and restored at the end, and with patience, training stops after that
+    many epochs without a gain above `minimum_improvement`.
+    """
+    scheduler: optim.lr_scheduler.LRScheduler | None = (
+        optim.lr_scheduler.ExponentialLR(
+            optimizer, training_parameters.learning_rate_decay
+        )
+        if training_parameters.learning_rate_decay != 1.0
+        else None
+    )
+    best_score: float = float("-inf")
+    best_epoch: int | None = None
+    best_state: dict[str, Tensor] | None = None
+    stale_epoch_quantity: int = 0
     for epoch in range(training_parameters.epochs):
         logger.info(f"Training epoch {epoch}")
         average_training_loss: float = _train_one_epoch(
@@ -761,17 +1098,19 @@ def _train_all_epochs(
             training_parameters,
             rank=rank,
         )
+        if scheduler is not None:
+            scheduler.step()
         evaluation: _Evaluation = _evaluate(
             model, validation_loader, training_parameters, rank=rank
+        )
+        cell_results, _ = metrics.experiment_metrics(
+            evaluation.predictions, evaluation.labels
         )
         logger.info(
             f"Epoch {epoch} Training loss: {average_training_loss}, Validation loss: "
             f"{evaluation.loss}, Validation AUC: {evaluation.auc}"
         )
         if run_directory is not None:
-            cell_results, _ = metrics.experiment_metrics(
-                evaluation.predictions, evaluation.labels
-            )
             records.append_epoch(
                 run_directory,
                 epoch,
@@ -780,10 +1119,62 @@ def _train_all_epochs(
                 evaluation.auc,
                 [cell_result.auc for cell_result in cell_results],
             )
-        if training_parameters.gpu_quantity > 1 and rank == 0:
-            torch.save(model.module.state_dict(), output_directory / "model.pt")
-        else:
-            torch.save(model.state_dict(), output_directory / "model.pt")
+        if training_parameters.selection_metric is None:
+            _save_model(model, output_directory, training_parameters, rank)
+            continue
+
+        score: float = _selection_score(
+            training_parameters.selection_metric, evaluation, cell_results
+        )
+        logger.info(
+            "Epoch %d validation %s: %.4f",
+            epoch,
+            training_parameters.selection_metric,
+            score,
+        )
+        is_best, is_improvement = _first_rank_decisions(
+            [
+                bool(score > best_score),
+                bool(
+                    score > best_score + training_parameters.minimum_improvement
+                ),
+            ]
+        )
+        if is_best:
+            best_score, best_epoch = score, epoch
+            best_state = {
+                name: tensor.detach().clone()
+                for name, tensor in model.state_dict().items()
+            }
+            _save_model(model, output_directory, training_parameters, rank)
+        stale_epoch_quantity = 0 if is_improvement else stale_epoch_quantity + 1
+        if (
+            training_parameters.patience is not None
+            and stale_epoch_quantity >= training_parameters.patience
+        ):
+            logger.info(
+                "Stopping after epoch %d: no validation gain above %g in %d "
+                "epochs",
+                epoch,
+                training_parameters.minimum_improvement,
+                stale_epoch_quantity,
+            )
+            break
+
+    if training_parameters.selection_metric is None:
+        return
+
+    if best_state is None:
+        logger.warning(
+            "No epoch had a defined validation score; keeping the last epoch"
+        )
+        _save_model(model, output_directory, training_parameters, rank)
+        return
+
+    model.load_state_dict(best_state)
+    logger.info(
+        "Restored epoch %d, of validation score %.4f", best_epoch, best_score
+    )
 
 
 def _experiment_name(training_parameters: TrainingParameters) -> str:
@@ -923,44 +1314,75 @@ def _record_final_evaluation(
         (records.TRAINING_SPLIT, datasets.training),
         (records.TEST_SPLIT, datasets.test),
     ]:
-        if dataset is None:
-            continue
+        if dataset is not None:
+            _record_split(
+                model, dataset, split, training_parameters, run_directory, rank
+            )
 
-        evaluation: _Evaluation = _evaluate(
-            model,
-            DataLoader(
-                dataset,
-                batch_size=training_parameters.batch_size,
-                shuffle=False,
-            ),
-            training_parameters,
-            rank=rank,
-        )
-        records.write_split_outputs(
-            run_directory,
-            split,
-            records.SplitOutputs(
-                chromosome_names=dataset.chromosome_names,
-                chromosome_indices=dataset.chromosome_indices,
-                positions=dataset.positions,
-                labels=evaluation.labels,
-                predictions=evaluation.predictions,
-            ),
-        )
-        cell_results, pooled_result = metrics.experiment_metrics(
-            evaluation.predictions, evaluation.labels
-        )
-        records.write_metrics(
-            run_directory, split, evaluation.loss, cell_results, pooled_result
-        )
-        logger.info(
-            "Final %s loss: %s, AUC: %s",
-            split,
-            evaluation.loss,
-            pooled_result.auc,
-        )
+    if training_parameters.evaluation_shots and datasets.test is None:
+        logger.warning("No test chromosomes; skipping shot evaluations")
+    elif training_parameters.evaluation_shots:
+        for shots in training_parameters.evaluation_shots:
+            model_factory.set_evaluation_shots(model, shots)
+            if training_parameters.seed is not None:
+                torch.manual_seed(
+                    training_parameters.seed + SHOT_SEED_OFFSET + shots
+                )
+            _record_split(
+                model,
+                datasets.test,
+                f"{records.TEST_SPLIT}_shots_{shots}",
+                training_parameters,
+                run_directory,
+                rank,
+            )
+        model_factory.set_evaluation_shots(model, 0)
 
     torch.save(model.state_dict(), run_directory / records.MODEL_FILENAME)
+
+
+def _record_split(
+    model: nn.Module,
+    dataset: data.QuantumTorchDataset,
+    split: str,
+    training_parameters: TrainingParameters,
+    run_directory: Path,
+    rank: int | None = None,
+) -> None:
+    """Evaluate a model on every sample of a split and record it."""
+    evaluation: _Evaluation = _evaluate(
+        model,
+        DataLoader(
+            dataset,
+            batch_size=training_parameters.batch_size,
+            shuffle=False,
+        ),
+        training_parameters,
+        rank=rank,
+    )
+    records.write_split_outputs(
+        run_directory,
+        split,
+        records.SplitOutputs(
+            chromosome_names=dataset.chromosome_names,
+            chromosome_indices=dataset.chromosome_indices,
+            positions=dataset.positions,
+            labels=evaluation.labels,
+            predictions=evaluation.predictions,
+        ),
+    )
+    cell_results, pooled_result = metrics.experiment_metrics(
+        evaluation.predictions, evaluation.labels
+    )
+    records.write_metrics(
+        run_directory, split, evaluation.loss, cell_results, pooled_result
+    )
+    logger.info(
+        "Final %s loss: %s, AUC: %s",
+        split,
+        evaluation.loss,
+        pooled_result.auc,
+    )
 
 
 def _train_and_record(
@@ -1028,6 +1450,7 @@ def _single_distributed_gpu_train_qcpg_circuit(
         format=f"[Rank {rank}] " + "%(asctime)s - %(levelname)s - %(message)s",
     )
     logger.info("Setting up training on GPU %d", rank)
+    _seed(training_parameters)
     datasets: _Datasets = _load_datasets(training_parameters)
     training_loader, validation_loader, model, optimizer = _prepare_training(
         training_parameters, rank=rank, datasets=datasets
@@ -1069,24 +1492,53 @@ def _multi_gpu_train_qcpq_circuit(
 
 
 def _set_up_logging(training_parameters: TrainingParameters) -> None:
+    log_directory: Path = (
+        training_parameters.log_directory
+        or training_parameters.output_directory
+    )
+    log_directory.mkdir(parents=True, exist_ok=True)
     logging.basicConfig(
-        filename=training_parameters.log_directory / "qcpg_train.log",
         level=training_parameters.log_level,
         format="%(asctime)s - %(levelname)s - %(message)s",
+        handlers=[
+            logging.FileHandler(log_directory / "qcpg_train.log"),
+            logging.StreamHandler(),
+        ],
     )
     logger.info("Using the following training parameters:")
-    logger.info("\tEntangler: %s", training_parameters.entangler)
+    logger.info("\tModel: %s", training_parameters.model)
+    if training_parameters.model == QNN_MODEL:
+        logger.info("\tEntangler: %s", training_parameters.entangler)
+        logger.info("\tMeasurement: %s", training_parameters.measurement)
+        logger.info("\tLayer quantity: %d", training_parameters.layer_quantity)
+    else:
+        logger.info("\tModel options: %s", training_parameters.model_options)
     logger.info("\tEncoding: %s", training_parameters.encoding)
-    logger.info("\tMeasurement: %s", training_parameters.measurement)
-    logger.info("\tLayer quantity: %d", training_parameters.layer_quantity)
+    logger.info("\tDevice: %s", training_parameters.device_name)
     logger.info("\tLearning rate: %f", training_parameters.learning_rate)
     logger.info("\tEpochs: %d", training_parameters.epochs)
     logger.info("\tL1 regularization: %f", training_parameters.l1_regularizer)
     logger.info("\tL2 regularization: %f", training_parameters.l2_regularizer)
 
 
+def _seed(training_parameters: TrainingParameters) -> None:
+    if training_parameters.seed is not None:
+        torch.manual_seed(training_parameters.seed)
+        np.random.seed(training_parameters.seed)
+
+
 def train_qnn_circuit(training_parameters: TrainingParameters) -> None:
+    """
+    Train a model and record the run.
+
+    Raises
+    ------
+    ValueError if a training parameter is invalid.
+    """
+    check_training_parameters(training_parameters)
+    training_parameters.output_directory.mkdir(parents=True, exist_ok=True)
     _set_up_logging(training_parameters)
+    _seed(training_parameters)
 
     if training_parameters.gpu_quantity in [0, 1]:
         if training_parameters.gpu_quantity == 1:

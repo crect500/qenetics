@@ -10,10 +10,11 @@ import h5py
 import numpy as np
 import torch
 from numpy.typing import NDArray
+from tokenizers import Tokenizer
 from torch.utils.data import Dataset
 from transformers.tokenization_utils_tokenizers import TokenizersBackend
 
-from qenetics.tools import converters, dna, methylation
+from qenetics.tools import converters, dna, methylation, tokenization
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +26,22 @@ METHYLATION_STR: str = "methylation_sequences"
 TOKEN_ENCODING_STR: str = "token"
 ONEHOT_ENCODING_STR: str = "onehot"
 BPE_ENCODING_STR: str = "bpe"
+# Root attributes of the token files of `create_token_h5_dataset`.
+TOKENIZATION_ATTRIBUTE: str = "tokenization"
+INPUT_NAME_STR: str = "input_name"
+VOCABULARY_SIZE_ATTRIBUTE: str = "vocabulary_size"
+TOKEN_ATTRIBUTES: tuple[str, ...] = (
+    TOKENIZATION_ATTRIBUTE,
+    INPUT_NAME_STR,
+    VOCABULARY_SIZE_ATTRIBUTE,
+)
+# The torch type that stores tokens of each byte width.
+_TOKEN_STORAGE_TYPES: dict[int, torch.dtype] = {
+    1: torch.int8,
+    2: torch.int16,
+    4: torch.int32,
+    8: torch.int32,
+}
 H5_STR: str = "h5"
 POSITIONS_KEY: str = "positions"
 SEQUENCE_BATCH_SIZE: int = 4096
@@ -181,6 +198,9 @@ class QuantumTorchDataset(Dataset):
                 self.experiment_names: list[str] | None = (
                     _read_h5_experiment_names(dataset)
                 )
+                self.token_attributes: dict[str, str | int] = (
+                    read_h5_token_attributes(dataset)
+                )
                 if self.experiment_names is None:
                     self.experiment_quantity = 1
                 else:
@@ -199,6 +219,13 @@ class QuantumTorchDataset(Dataset):
                         str(filepaths[0]),
                         str(filepath),
                     )
+                    if read_h5_token_attributes(dataset) != (
+                        self.token_attributes
+                    ):
+                        raise ValueError(
+                            f"Token attributes of {filepath} do not match "
+                            f"those of {filepaths[0]}"
+                        )
 
             input_encoding: str = _determine_sample_encoding(
                 filepaths, file_format, samples_key
@@ -235,8 +262,10 @@ class QuantumTorchDataset(Dataset):
 
         # Nucleotide codes or tokens, as returned by `_sequence_codes`, or
         # BPE token IDs.
-        if encoding in [TOKEN_ENCODING_STR, ONEHOT_ENCODING_STR]:
+        if encoding == ONEHOT_ENCODING_STR:
             sequences_dtype: torch.dtype = torch.int8
+        elif encoding == TOKEN_ENCODING_STR:
+            sequences_dtype = _token_storage_type(filepaths, samples_key)
         elif encoding == BPE_ENCODING_STR:
             sequences_dtype = torch.int32
         else:
@@ -363,6 +392,7 @@ class QuantumTorchDataset(Dataset):
                                     input_encoding,
                                     encoding,
                                     allow_N=allow_N,
+                                    dtype=self.sequences.numpy().dtype,
                                 )
                             )
 
@@ -429,6 +459,60 @@ def _read_h5_experiment_names(dataset: h5py.File) -> list[str] | None:
         return list(ratios)
 
     return None
+
+
+def read_h5_token_attributes(dataset: h5py.File) -> dict[str, str | int]:
+    """
+    Read the tokenization of a token file of `create_token_h5_dataset`.
+
+    Args
+    ----
+    dataset: The open H5 file.
+
+    Returns
+    -------
+    The `TOKEN_ATTRIBUTES` the file holds, empty for files of nucleotides.
+    """
+    attributes: dict[str, str | int] = {}
+    for name in TOKEN_ATTRIBUTES:
+        if name in dataset.attrs:
+            value = dataset.attrs[name]
+            attributes[name] = (
+                int(value) if isinstance(value, np.integer) else str(value)
+            )
+    return attributes
+
+
+def read_h5_layout(filepath: Path) -> tuple[int, int, dict[str, str | int]]:
+    """
+    Read the layout of a dataset file without loading its samples.
+
+    Args
+    ----
+    filepath: An H5 dataset file.
+
+    Returns
+    -------
+    The sequence length, the number of experiments, and the token
+    attributes, see `read_h5_token_attributes`.
+
+    Raises
+    ------
+    RuntimeError if the file holds no sequence samples.
+    """
+    with h5py.File(filepath) as dataset:
+        samples_key: str = _find_h5_samples_key(dataset)
+        samples: h5py.Dataset = (
+            dataset[INPUTS_STR][DNA_STR]
+            if samples_key == INPUTS_STR
+            else dataset[METHYLATION_STR]
+        )
+        experiment_names: list[str] | None = _read_h5_experiment_names(dataset)
+        return (
+            samples.shape[1],
+            1 if experiment_names is None else len(experiment_names),
+            read_h5_token_attributes(dataset),
+        )
 
 
 def check_experiment_names(
@@ -510,7 +594,8 @@ def _sequence_codes(
     encoding: str,
     *,
     allow_N: bool = False,
-) -> NDArray[np.int8]:
+    dtype: np.typing.DTypeLike = np.int8,
+) -> NDArray[np.signedinteger]:
     """
     Convert sequences read from an H5 file to the codes a dataset holds.
 
@@ -529,6 +614,7 @@ def _sequence_codes(
     allow_N: Whether one-hot encoded sequences converted to tokens may hold
         unknown nucleotides, which shifts the tokens to N = 0, A = 1, T = 2,
         G = 3 and C = 4.
+    dtype: The signed integer type of tokens read from token-encoded files.
 
     Returns
     -------
@@ -537,7 +623,8 @@ def _sequence_codes(
     Raises
     ------
     ValueError if one-hot sequences are not one-hot encoded, or hold unknown
-    nucleotides that are not allowed, or tokens are not valid nucleotide codes.
+    nucleotides that are not allowed, or tokens are not valid nucleotide codes
+    or do not fit in the type.
     """
     if input_encoding == ONEHOT_ENCODING_STR:
         improper_message: str = (
@@ -579,13 +666,15 @@ def _sequence_codes(
             raise ValueError(
                 f"{samples[is_invalid][0]} is not a valid nucleotide designator"
             )
-    elif samples.size and (
-        samples.min() < np.iinfo(np.int8).min
-        or samples.max() > np.iinfo(np.int8).max
-    ):
-        raise ValueError("Tokens must fit in 8-bit integers")
+        return samples.astype(np.int8)
 
-    return samples.astype(np.int8)
+    limits: np.iinfo = np.iinfo(dtype)
+    if samples.size and (
+        samples.min() < limits.min or samples.max() > limits.max
+    ):
+        raise ValueError(f"Tokens must fit in {limits.bits}-bit integers")
+
+    return samples.astype(dtype)
 
 
 def _check_file_types(filepaths: Sequence[Path]) -> str:
@@ -675,6 +764,31 @@ def _determine_h5_dimensions_and_type(filepath: Path, samples_key: str) -> int:
                 len(dataset[METHYLATION_STR].shape),
                 dataset[METHYLATION_STR].dtype,
             )
+
+
+def _token_storage_type(
+    filepaths: Sequence[Path], samples_key: str
+) -> torch.dtype:
+    """
+    Choose the narrowest signed integer type that holds the files' tokens.
+
+    Args
+    ----
+    filepaths: The files to load.
+    samples_key: The key that represents a certain H5 file structure.
+
+    Returns
+    -------
+    int8 for one-hot files and 8-bit tokens, else the tokens' width.
+    """
+    itemsize: int = 1
+    for filepath in filepaths:
+        dimension_quantity, dtype = _determine_h5_dimensions_and_type(
+            filepath, samples_key
+        )
+        if dimension_quantity == 2:
+            itemsize = max(itemsize, np.dtype(dtype).itemsize)
+    return _TOKEN_STORAGE_TYPES[itemsize]
 
 
 def _check_np_int(dtype: np.typing.DTypeLike) -> bool:
@@ -1449,7 +1563,10 @@ class _ChromosomeDatasets:
         cls,
         fd: h5py.File,
         sequence_length: int,
-        experiment_names: Sequence[str],
+        experiment_names: Sequence[str] | None,
+        *,
+        sample_shape: tuple[int, ...] | None = None,
+        dtype: str = "i1",
     ) -> _ChromosomeDatasets:
         """
         Create the empty datasets of a chromosome's H5 file.
@@ -1458,28 +1575,39 @@ class _ChromosomeDatasets:
         ----
         fd: The H5 file, open for writing.
         sequence_length: The length of the sequence windows.
-        experiment_names: The name of each experiment.
+        experiment_names: The name of each experiment, or None for labels
+            stored as a single unnamed dataset.
+        sample_shape: The shape of each sequence. Defaults to one-hot
+            nucleotides, (sequence_length, 4).
+        dtype: The type of the sequences.
 
         Returns
         -------
-        The datasets of the one-hot encoded sequence windows, the 1-based
-        position of each site's C, and the labels of each experiment.
+        The datasets of the sequence windows, the 1-based position of each
+        site's C, and the labels of each experiment.
         """
-        ratios_group: h5py.Group = fd.create_group(METHYLATION_RATIOS_KEY)
-        return cls(
-            sequences=_create_resizable_dataset(
-                fd,
-                METHYLATION_SEQUENCES_KEY,
-                (sequence_length, converters.UNIQUE_NUCLEOTIDE_QUANTITY),
-                "i1",
-            ),
-            positions=_create_resizable_dataset(fd, POSITIONS_KEY, (), "i8"),
-            ratios=[
+        if experiment_names is None:
+            ratios: list[h5py.Dataset] = [
+                _create_resizable_dataset(fd, METHYLATION_RATIOS_KEY, (), "f4")
+            ]
+        else:
+            ratios_group: h5py.Group = fd.create_group(METHYLATION_RATIOS_KEY)
+            ratios = [
                 _create_resizable_dataset(
                     ratios_group, experiment_name, (), "f4"
                 )
                 for experiment_name in experiment_names
-            ],
+            ]
+        return cls(
+            sequences=_create_resizable_dataset(
+                fd,
+                METHYLATION_SEQUENCES_KEY,
+                sample_shape
+                or (sequence_length, converters.UNIQUE_NUCLEOTIDE_QUANTITY),
+                dtype,
+            ),
+            positions=_create_resizable_dataset(fd, POSITIONS_KEY, (), "i8"),
+            ratios=ratios,
         )
 
     def append(
@@ -2153,6 +2281,228 @@ def create_h5_dataset_from_deepcpg_files(
                 samples_written,
                 chromosome,
             )
+
+
+def _read_nucleotide_codes(
+    filepath: Path,
+) -> tuple[
+    NDArray[np.int8], NDArray[np.int64], NDArray[np.float32], list[str] | None
+]:
+    """
+    Read a chromosome file's nucleotide codes, positions and labels.
+
+    Args
+    ----
+    filepath: An H5 file of one-hot or nucleotide-code sequences.
+
+    Returns
+    -------
+    The codes (A = 0, T = 1, G = 2, C = 3, -1 unknown), the 1-based position
+    of each site (-1 if not stored), the labels (NaN if unobserved), and the
+    experiment names (None for a single unnamed label dataset).
+    """
+    samples_key: str
+    with h5py.File(filepath) as dataset:
+        samples_key = _find_h5_samples_key(dataset)
+    input_encoding: str = _determine_h5_sample_encoding([filepath], samples_key)
+    with h5py.File(filepath) as dataset:
+        samples: h5py.Dataset = (
+            dataset[INPUTS_STR][DNA_STR]
+            if samples_key == INPUTS_STR
+            else dataset[METHYLATION_STR]
+        )
+        blocks: list[NDArray[np.int8]] = [
+            _sequence_codes(
+                samples[start : start + SEQUENCE_BATCH_SIZE],
+                input_encoding,
+                ONEHOT_ENCODING_STR,
+            )
+            for start in range(0, len(samples), SEQUENCE_BATCH_SIZE)
+        ]
+        codes: NDArray[np.int8] = (
+            np.concatenate(blocks)
+            if blocks
+            else np.empty((0, samples.shape[1]), dtype=np.int8)
+        )
+        positions: NDArray[np.int64] = (
+            dataset[POSITIONS_KEY][()].astype(np.int64)
+            if POSITIONS_KEY in dataset
+            else np.full(len(codes), -1, dtype=np.int64)
+        )
+        return (
+            codes,
+            positions,
+            _read_h5_labels(dataset),
+            _read_h5_experiment_names(dataset),
+        )
+
+
+def _tokenize_codes(
+    codes: NDArray[np.int8],
+    method: str,
+    *,
+    tokenizer: Tokenizer | None,
+    kmer_length: int | None,
+    flank_token_quantity: int,
+    lengths: NDArray[np.int64] | None,
+) -> NDArray[np.int16]:
+    """Tokenize nucleotide codes by one of `tokenization.TOKENIZATIONS`."""
+    if method == tokenization.CPG_KMER:
+        return tokenization.cpg_kmer_tokens(
+            codes, kmer_length, flank_token_quantity=flank_token_quantity
+        )
+
+    tokens: NDArray[np.int16] = tokenization.cpg_bpe_tokens(
+        codes, tokenizer, flank_token_quantity=flank_token_quantity
+    )
+    if method == tokenization.CPG_BPE:
+        return tokens
+
+    painted: NDArray[np.int16] = tokenization.painted_tokens(
+        tokens, lengths, codes.shape[1]
+    )
+    if method == tokenization.PAINTED:
+        return painted
+
+    return tokenization.pack_painted_bases(painted, codes)
+
+
+def create_token_h5_dataset(
+    input_directory: Path,
+    output_directory: Path,
+    method: str,
+    *,
+    vocabulary_size: int | None = None,
+    kmer_length: int | None = None,
+    training_chromosomes: Sequence[str] | None = None,
+    tokenizer_filepath: Path | None = None,
+    flank_token_quantity: int = tokenization.FLANK_TOKEN_QUANTITY,
+) -> list[Path]:
+    """
+    Tokenize the CpG-centred windows of every chromosome file of a dataset.
+
+    Each output file holds the same sites, positions and labels as its input,
+    with the tokens as `METHYLATION_SEQUENCES_KEY` (16-bit integers) and the
+    tokenization in its `TOKEN_ATTRIBUTES`. A BPE vocabulary learned here is
+    saved as `tokenizer.json` in the output directory.
+
+    Args
+    ----
+    input_directory: The directory of 'chr<name>.h5' files of one-hot or
+        nucleotide-code sequences with the CpG's C at (length - 1) // 2.
+    output_directory: The directory for the token files.
+    method: One of `tokenization.TOKENIZATIONS`.
+    vocabulary_size: The BPE vocabulary size, for every method but k-mers.
+    kmer_length: The k-mer length, for k-mers.
+    training_chromosomes: The chromosomes to learn the BPE vocabulary from,
+        if no tokenizer is given.
+    tokenizer_filepath: A tokenizer to reuse, such as one learned for the
+        same dataset's BPE tokens.
+    flank_token_quantity: The tokens kept per flank.
+
+    Returns
+    -------
+    The token files written.
+
+    Raises
+    ------
+    ValueError if the method or its options are invalid, a window is not
+    CpG-centred, or a training chromosome is missing.
+    FileNotFoundError if the input directory holds no chromosome files.
+    """
+    if method not in tokenization.TOKENIZATIONS:
+        raise ValueError(
+            f"Unknown tokenization {method}; expected one of "
+            f"{', '.join(tokenization.TOKENIZATIONS)}"
+        )
+    filepaths: list[Path] = sorted(input_directory.glob("chr*.h5"))
+    if not filepaths:
+        raise FileNotFoundError(f"No chr*.h5 files in {input_directory}")
+
+    tokenizer: Tokenizer | None = None
+    lengths: NDArray[np.int64] | None = None
+    if method == tokenization.CPG_KMER:
+        if kmer_length is None:
+            raise ValueError("K-mer tokenization needs a k-mer length")
+        file_vocabulary_size: int = tokenization.kmer_vocabulary_size(
+            kmer_length
+        )
+        name: str = tokenization.input_name(method, kmer_length)
+    else:
+        if vocabulary_size is None:
+            raise ValueError(f"{method} tokenization needs a vocabulary size")
+        output_directory.mkdir(parents=True, exist_ok=True)
+        if tokenizer_filepath is not None:
+            tokenizer = Tokenizer.from_file(str(tokenizer_filepath))
+        else:
+            if not training_chromosomes:
+                raise ValueError(
+                    "Learning a BPE vocabulary needs training chromosomes"
+                )
+            training_filepaths: list[Path] = [
+                input_directory / f"chr{chromosome}.h5"
+                for chromosome in training_chromosomes
+            ]
+            missing: list[str] = [
+                str(filepath)
+                for filepath in training_filepaths
+                if not filepath.exists()
+            ]
+            if missing:
+                raise ValueError(
+                    f"Training chromosome files not found: {', '.join(missing)}"
+                )
+            tokenizer = tokenization.train_cpg_bpe_tokenizer(
+                np.concatenate(
+                    [
+                        _read_nucleotide_codes(filepath)[0]
+                        for filepath in training_filepaths
+                    ]
+                ),
+                vocabulary_size,
+            )
+            tokenizer.save(str(output_directory / "tokenizer.json"))
+        tokenization.check_tokenizer(tokenizer, vocabulary_size)
+        lengths = tokenization.token_lengths(tokenizer, vocabulary_size)
+        file_vocabulary_size = vocabulary_size * (
+            tokenization.PAINTED_BASE_STATES
+            if method == tokenization.PAINTED_BASES
+            else 1
+        )
+        name = tokenization.input_name(method, vocabulary_size)
+
+    output_directory.mkdir(parents=True, exist_ok=True)
+    output_filepaths: list[Path] = []
+    for filepath in filepaths:
+        codes, positions, labels, experiment_names = _read_nucleotide_codes(
+            filepath
+        )
+        tokens: NDArray[np.int16] = _tokenize_codes(
+            codes,
+            method,
+            tokenizer=tokenizer,
+            kmer_length=kmer_length,
+            flank_token_quantity=flank_token_quantity,
+            lengths=lengths,
+        )
+        output_filepath: Path = output_directory / filepath.name
+        with h5py.File(output_filepath, "w") as fd:
+            fd.attrs[TOKENIZATION_ATTRIBUTE] = method
+            fd.attrs[INPUT_NAME_STR] = name
+            fd.attrs[VOCABULARY_SIZE_ATTRIBUTE] = file_vocabulary_size
+            datasets = _ChromosomeDatasets.create(
+                fd,
+                tokens.shape[1],
+                experiment_names,
+                sample_shape=(tokens.shape[1],),
+                dtype="i2",
+            )
+            datasets.append(tokens, positions, labels)
+        logger.info(
+            "Wrote %d %s windows to %s", len(tokens), name, output_filepath
+        )
+        output_filepaths.append(output_filepath)
+    return output_filepaths
 
 
 def _find_bounds(original_length: int, new_length: int) -> tuple[int, int]:
