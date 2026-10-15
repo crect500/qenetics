@@ -101,6 +101,25 @@ Adjust the resources and environment of `train_cpu.sbatch` and
 environment, by default `.venv` in the repository. `--dry-run` writes the run
 list and prints the sbatch command only.
 
+`scripts/cluster/plan_runs.py` runs the quantum experiments of the training
+plan: every preset without a full-dataset run on the full training sets
+(`full`), the wide-bank control (`E4`), chromosome cross-validation (`E12`)
+and widened 2i and serum training sets (`E13`) of Q_L320, and the global
+circuits (`Q1`). Runs keep the epoch of the best mean per-cell validation
+AUC, train for at most 25 epochs, and a run that collapses is rerun with its
+seed + 10. `submit` queues the runs that have not completed and submits
+whole-node jobs, at most `--gpu-nodes` and `--cpu-nodes` at a time
+(`pool_gpu.sbatch`, `pool_cpu.sbatch`), whose workers take runs from the
+queue; it also writes the token inputs the token presets read. Submitting
+again resumes the plan.
+
+```bash
+python scripts/cluster/plan_runs.py submit --data-directories /data/2i \
+    /data/hcc /data/hepg2 /data/ser /data/mESC --output-directory /scratch/q
+python scripts/cluster/plan_runs.py status /scratch/q
+python scripts/build_training_report.py -r /scratch/q/full/records
+```
+
 ## Tests
 
 ```bash
