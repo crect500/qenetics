@@ -543,6 +543,13 @@ def test_determine_dataset_sample_quantity(
         )
 
 
+def test_read_h5_sample_quantity(
+    test_inputs_h5_file: Path, test_methylation_h5_file: Path
+) -> None:
+    assert data.read_h5_sample_quantity(test_inputs_h5_file) == 10
+    assert data.read_h5_sample_quantity(test_methylation_h5_file) == 4
+
+
 def test_determine_sample_quantity(test_inputs_h5_file: Path) -> None:
     assert (
         data._determine_sample_quantity(

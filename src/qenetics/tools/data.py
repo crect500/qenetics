@@ -515,6 +515,28 @@ def read_h5_layout(filepath: Path) -> tuple[int, int, dict[str, str | int]]:
         )
 
 
+def read_h5_sample_quantity(filepath: Path) -> int:
+    """
+    Count the samples of a dataset file without loading them.
+
+    Args
+    ----
+    filepath: An H5 dataset file.
+
+    Returns
+    -------
+    The number of samples.
+
+    Raises
+    ------
+    RuntimeError if the file holds no sequence samples.
+    """
+    with h5py.File(filepath) as dataset:
+        return _determine_dataset_sample_quantity(
+            dataset, _find_h5_samples_key(dataset)
+        )
+
+
 def check_experiment_names(
     expected_names: list[str] | None,
     names: list[str] | None,

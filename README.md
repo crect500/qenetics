@@ -90,6 +90,45 @@ training setting. A model family can be configured from scratch with
 
 Each run is recorded in the records directory and added to its HTML report.
 
+## Cluster (SLURM)
+
+`scripts/cluster/slurm_runs.py submit` runs presets, datasets and seeds as a
+job array, one run per task with its own output directory, on CPU nodes or
+one GPU per task:
+
+```bash
+python scripts/cluster/slurm_runs.py submit --presets 'deepcpg_tail/*' \
+    --data-directories /data/hcc --seeds 0 1 2 --output-directory /scratch/q \
+    --resources gpu --max-concurrent 8 --sbatch-args='--partition=gpu' \
+    -- --training-chromosomes 1 3 5 7 9 --validation-chromosomes 13 \
+    --test-chromosomes 2 4
+python scripts/build_training_report.py -r /scratch/q/records
+```
+
+Adjust the resources and environment of `train_cpu.sbatch` and
+`train_gpu.sbatch` to the cluster; `QENETICS_ENV` names the Python
+environment, by default `.venv` in the repository. `--dry-run` writes the run
+list and prints the sbatch command only.
+
+`scripts/cluster/plan_runs.py` runs the quantum experiments of the training
+plan: every preset without a full-dataset run on the full training sets
+(`full`), the wide-bank control (`E4`), chromosome cross-validation (`E12`)
+and widened 2i and serum training sets (`E13`) of Q_L320, and the global
+circuits (`Q1`). Runs keep the epoch of the best mean per-cell validation
+AUC, train for at most 25 epochs, and a run that collapses is rerun with its
+seed + 10. `submit` queues the runs that have not completed and submits
+whole-node jobs, at most `--gpu-nodes` and `--cpu-nodes` at a time
+(`pool_gpu.sbatch`, `pool_cpu.sbatch`), whose workers take runs from the
+queue; it also writes the token inputs the token presets read. Submitting
+again resumes the plan.
+
+```bash
+python scripts/cluster/plan_runs.py submit --data-directories /data/2i \
+    /data/hcc /data/hepg2 /data/ser /data/mESC --output-directory /scratch/q
+python scripts/cluster/plan_runs.py status /scratch/q
+python scripts/build_training_report.py -r /scratch/q/full/records
+```
+
 ## Tests
 
 ```bash
