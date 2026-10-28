@@ -271,6 +271,25 @@ def test_cnn_quantum_head_trains(separate_angles: bool) -> None:
     assert torch.allclose(probabilities[:, 0], probabilities[:, 4])
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="needs a GPU")
+def test_cnn_quantum_head_runs_on_gpu() -> None:
+    torch.manual_seed(5)
+    model = (
+        CNNQuantumHead(60, 3, wire_quantity=4, hidden_layer_sizes=[6])
+        .double()
+        .eval()
+    )
+    inputs = _one_hot(2, 60).double()
+    expected = model(inputs)
+    model.cuda()
+    probabilities = model(inputs.cuda())
+    assert probabilities.device.type == "cuda"
+    assert torch.allclose(probabilities.cpu(), expected, atol=1e-10)
+    model.train()
+    model(inputs.cuda()).sum().backward()
+    assert _gradients_reach_every_parameter(model)
+
+
 def test_cnn_quantum_head_errors() -> None:
     with pytest.raises(ValueError, match="no positions"):
         CNNQuantumHead(20, 2)

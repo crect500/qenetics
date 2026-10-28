@@ -231,6 +231,31 @@ def test_pure_models_train(model: torch.nn.Module) -> None:
     assert model.eval()(inputs[0]).shape == (2,)
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="needs a GPU")
+@pytest.mark.parametrize(
+    "model",
+    [
+        WindowAverageClassifier(30, 2, window_length=4),
+        FeatureAmplitudeClassifier(30, 2, quantum_layer_quantity=2),
+        FeatureReuploadingClassifier(30, 2, wire_quantity=4),
+        QuantumAutomaton(30, 2, width=10),
+    ],
+)
+def test_pure_models_run_on_gpu(model: torch.nn.Module) -> None:
+    inputs = _one_hot(4, 30)
+    expected = model.double().eval()(inputs)
+    model.cuda()
+    probabilities = model(inputs.cuda())
+    assert probabilities.device.type == "cuda"
+    assert torch.allclose(probabilities.cpu(), expected, atol=1e-10)
+    model.train()(inputs.cuda()).sum().backward()
+    assert all(
+        parameter.grad is not None
+        for parameter in model.parameters()
+        if parameter.requires_grad
+    )
+
+
 @pytest.mark.parametrize(
     "model",
     [
