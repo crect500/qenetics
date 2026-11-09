@@ -111,6 +111,23 @@
       "selection_metric": "pooled_auc",
       "epochs": 15,
       "training_sample_quantity": 5000
+    },
+    "factorization_machine": {
+      "batch_size": 256,
+      "learning_rate_decay": 0.95,
+      "selection_metric": "mean_cell_auc",
+      "epochs": 15,
+      "patience": 3,
+      "learning_rate": 0.001,
+      "training_sample_quantity": 200000
+    },
+    "deepcpg_paper": {
+      "batch_size": 128,
+      "learning_rate_decay": 0.95,
+      "selection_metric": "mean_cell_auc",
+      "epochs": 30,
+      "patience": 10,
+      "learning_rate": 0.0001
     }
   },
   "presets": {
@@ -1701,6 +1718,1307 @@
         ]
       },
       "training_settings": "series_1_four_epochs",
+      "input": "bases"
+    },
+    "classical_tail/CNN": {
+      "description": "Series II's CNN: DeepCpG's CNN (CnnL2h128): conv 128 x 11 + ReLU, DeepCpG tail",
+      "model": "classical_network",
+      "options": {
+        "front": "convolution",
+        "window_length": 11,
+        "filter_quantity": 128,
+        "activation": "none"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "bases"
+    },
+    "classical_tail/CNN_deepcpg": {
+      "description": "DeepCpG's CNN trained with DeepCpG's settings: batch 128, lr 1e-4, early stopping after 10 epochs without gain",
+      "model": "classical_network",
+      "options": {
+        "front": "convolution",
+        "window_length": 11,
+        "filter_quantity": 128,
+        "activation": "none"
+      },
+      "training_settings": "deepcpg_paper",
+      "input": "bases"
+    },
+    "classical_tail/C_2": {
+      "description": "Series II's C_2: conv 2 x 16 + ReLU, DeepCpG tail",
+      "model": "classical_network",
+      "options": {
+        "front": "convolution",
+        "window_length": 16,
+        "filter_quantity": 2,
+        "activation": "none"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "bases"
+    },
+    "classical_tail/C_20": {
+      "description": "Series II's C_20: conv 20 x 16 + ReLU, DeepCpG tail",
+      "model": "classical_network",
+      "options": {
+        "front": "convolution",
+        "window_length": 16,
+        "filter_quantity": 20,
+        "activation": "none"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "bases"
+    },
+    "classical_tail/C_3": {
+      "description": "Series II's C_3: conv 3 x 16 + ReLU, DeepCpG tail",
+      "model": "classical_network",
+      "options": {
+        "front": "convolution",
+        "window_length": 16,
+        "filter_quantity": 3,
+        "activation": "none"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "bases"
+    },
+    "classical_tail/C_4": {
+      "description": "Series II's C_4: conv 4 x 16 + ReLU, DeepCpG tail",
+      "model": "classical_network",
+      "options": {
+        "front": "convolution",
+        "window_length": 16,
+        "filter_quantity": 4,
+        "activation": "none"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "bases"
+    },
+    "classical_tail/C_40": {
+      "description": "Series II's C_40: conv 40 x 16 + ReLU, DeepCpG tail",
+      "model": "classical_network",
+      "options": {
+        "front": "convolution",
+        "window_length": 16,
+        "filter_quantity": 40,
+        "activation": "none"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "bases"
+    },
+    "classical_tail/C_6": {
+      "description": "Series II's C_6: conv 6 x 16 + ReLU, DeepCpG tail",
+      "model": "classical_network",
+      "options": {
+        "front": "convolution",
+        "window_length": 16,
+        "filter_quantity": 6,
+        "activation": "none"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "bases"
+    },
+    "classical_tail/C_w2_6": {
+      "description": "Series II's C_w2_6: conv 6 x 2 + ReLU, DeepCpG tail",
+      "model": "classical_network",
+      "options": {
+        "front": "convolution",
+        "window_length": 2,
+        "filter_quantity": 6,
+        "activation": "none"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "bases"
+    },
+    "classical_tail/C_w2_8": {
+      "description": "Series II's C_w2_8: conv 8 x 2 + ReLU, DeepCpG tail",
+      "model": "classical_network",
+      "options": {
+        "front": "convolution",
+        "window_length": 2,
+        "filter_quantity": 8,
+        "activation": "none"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "bases"
+    },
+    "classical_tail/C_w32_23": {
+      "description": "Series II's C_w32_23: conv 23 x 32 + ReLU, DeepCpG tail",
+      "model": "classical_network",
+      "options": {
+        "front": "convolution",
+        "window_length": 32,
+        "filter_quantity": 23,
+        "activation": "none"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "bases"
+    },
+    "classical_tail/C_w32_44": {
+      "description": "Series II's C_w32_44: conv 44 x 32 + ReLU, DeepCpG tail",
+      "model": "classical_network",
+      "options": {
+        "front": "convolution",
+        "window_length": 32,
+        "filter_quantity": 44,
+        "activation": "none"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "bases"
+    },
+    "classical_tail/C_w4_13": {
+      "description": "Series II's C_w4_13: conv 13 x 4 + ReLU, DeepCpG tail",
+      "model": "classical_network",
+      "options": {
+        "front": "convolution",
+        "window_length": 4,
+        "filter_quantity": 13,
+        "activation": "none"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "bases"
+    },
+    "classical_tail/C_w4_170": {
+      "description": "Series II's C_w4_170: conv 170 x 4 + ReLU, DeepCpG tail",
+      "model": "classical_network",
+      "options": {
+        "front": "convolution",
+        "window_length": 4,
+        "filter_quantity": 170,
+        "activation": "none"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "bases"
+    },
+    "classical_tail/C_w4_330": {
+      "description": "Series II's C_w4_330: conv 330 x 4 + ReLU, DeepCpG tail",
+      "model": "classical_network",
+      "options": {
+        "front": "convolution",
+        "window_length": 4,
+        "filter_quantity": 330,
+        "activation": "none"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "bases"
+    },
+    "classical_tail/C_w4_5": {
+      "description": "Series II's C_w4_5: conv 5 x 4 + ReLU, DeepCpG tail",
+      "model": "classical_network",
+      "options": {
+        "front": "convolution",
+        "window_length": 4,
+        "filter_quantity": 5,
+        "activation": "none"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "bases"
+    },
+    "classical_tail/C_w64_14": {
+      "description": "Series II's C_w64_14: conv 14 x 64 + ReLU, DeepCpG tail",
+      "model": "classical_network",
+      "options": {
+        "front": "convolution",
+        "window_length": 64,
+        "filter_quantity": 14,
+        "activation": "none"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "bases"
+    },
+    "classical_tail/C_w64_26": {
+      "description": "Series II's C_w64_26: conv 26 x 64 + ReLU, DeepCpG tail",
+      "model": "classical_network",
+      "options": {
+        "front": "convolution",
+        "window_length": 64,
+        "filter_quantity": 26,
+        "activation": "none"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "bases"
+    },
+    "classical_tail/C_w8_4": {
+      "description": "Series II's C_w8_4: conv 4 x 8 + ReLU, DeepCpG tail",
+      "model": "classical_network",
+      "options": {
+        "front": "convolution",
+        "window_length": 8,
+        "filter_quantity": 4,
+        "activation": "none"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "bases"
+    },
+    "classical_tail/C_w8_9": {
+      "description": "Series II's C_w8_9: conv 9 x 8 + ReLU, DeepCpG tail",
+      "model": "classical_network",
+      "options": {
+        "front": "convolution",
+        "window_length": 8,
+        "filter_quantity": 9,
+        "activation": "none"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "bases"
+    },
+    "classical_tail/C_w8_90": {
+      "description": "Series II's C_w8_90: conv 90 x 8 + ReLU, DeepCpG tail",
+      "model": "classical_network",
+      "options": {
+        "front": "convolution",
+        "window_length": 8,
+        "filter_quantity": 90,
+        "activation": "none"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "bases"
+    },
+    "classical_tail/Cq_w32_11": {
+      "description": "Series II's Cq_w32_11: quadrature-pair energies of 11 x 32, affine + ReLU, DeepCpG tail",
+      "model": "classical_network",
+      "options": {
+        "front": "multi_scale",
+        "scales": [
+          [
+            32,
+            11
+          ]
+        ],
+        "mode": "quadrature",
+        "activation": "affine_relu"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "bases"
+    },
+    "classical_tail/Cq_w32_11_avg": {
+      "description": "Series II's Cq_w32_11_avg: quadrature-pair energies of 11 x 32, affine + ReLU, DeepCpG tail with an average first pool",
+      "model": "classical_network",
+      "options": {
+        "front": "multi_scale",
+        "scales": [
+          [
+            32,
+            11
+          ]
+        ],
+        "mode": "quadrature",
+        "activation": "affine_relu",
+        "first_pool": "average"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "bases"
+    },
+    "classical_tail/FC256": {
+      "description": "Series II's FC256: |Wx|^2 of a free complex matrix W of the 64-position window, affine + ReLU, DeepCpG tail",
+      "model": "classical_network",
+      "options": {
+        "front": "dense",
+        "window_length": 64,
+        "matrix": "complex",
+        "activation": "affine_relu"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "bases"
+    },
+    "classical_tail/FC64": {
+      "description": "Series II's FC64: |Wx|^2 of a free complex matrix W of the 16-position window, affine + ReLU, DeepCpG tail",
+      "model": "classical_network",
+      "options": {
+        "front": "dense",
+        "window_length": 16,
+        "matrix": "complex",
+        "activation": "affine_relu"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "bases"
+    },
+    "classical_tail/FR256": {
+      "description": "Series II's FR256: |Wx|^2 of a free real matrix W of the 64-position window, affine + ReLU, DeepCpG tail",
+      "model": "classical_network",
+      "options": {
+        "front": "dense",
+        "window_length": 64,
+        "matrix": "real",
+        "activation": "affine_relu"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "bases"
+    },
+    "classical_tail/FR64": {
+      "description": "Series II's FR64: |Wx|^2 of a free real matrix W of the 16-position window, affine + ReLU, DeepCpG tail",
+      "model": "classical_network",
+      "options": {
+        "front": "dense",
+        "window_length": 16,
+        "matrix": "real",
+        "activation": "affine_relu"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "bases"
+    },
+    "classical_tail/G_18": {
+      "description": "Series II's G_18: |Qx|^2 of 18 Givens rotations of the 16-position window, affine + ReLU, DeepCpG tail",
+      "model": "classical_network",
+      "options": {
+        "front": "givens",
+        "window_length": 16,
+        "angle_quantity": 18,
+        "activation": "affine_relu"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "bases"
+    },
+    "classical_tail/G_288": {
+      "description": "Series II's G_288: |Qx|^2 of 288 Givens rotations of the 16-position window, affine + ReLU, DeepCpG tail",
+      "model": "classical_network",
+      "options": {
+        "front": "givens",
+        "window_length": 16,
+        "angle_quantity": 288,
+        "activation": "affine_relu"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "bases"
+    },
+    "classical_tail/G_72": {
+      "description": "Series II's G_72: |Qx|^2 of 72 Givens rotations of the 16-position window, affine + ReLU, DeepCpG tail",
+      "model": "classical_network",
+      "options": {
+        "front": "givens",
+        "window_length": 16,
+        "angle_quantity": 72,
+        "activation": "affine_relu"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "bases"
+    },
+    "classical_tail/ID_0": {
+      "description": "Series II's ID_0: identity: the raw 16-position window as channels, affine + ReLU, DeepCpG tail",
+      "model": "classical_network",
+      "options": {
+        "front": "identity",
+        "window_length": 16,
+        "activation": "affine_relu"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "bases"
+    },
+    "classical_tail/ID_w1": {
+      "description": "Series II's B_ID1: identity: the raw 1-position window as channels, affine + ReLU, DeepCpG tail",
+      "model": "classical_network",
+      "options": {
+        "front": "identity",
+        "window_length": 1,
+        "activation": "affine_relu"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "bases"
+    },
+    "classical_tail/ID_w2": {
+      "description": "Series II's ID_w2: identity: the raw 2-position window as channels, affine + ReLU, DeepCpG tail",
+      "model": "classical_network",
+      "options": {
+        "front": "identity",
+        "window_length": 2,
+        "activation": "affine_relu"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "bases"
+    },
+    "classical_tail/ID_w32": {
+      "description": "Series II's ID_w32: identity: the raw 32-position window as channels, affine + ReLU, DeepCpG tail",
+      "model": "classical_network",
+      "options": {
+        "front": "identity",
+        "window_length": 32,
+        "activation": "affine_relu"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "bases"
+    },
+    "classical_tail/ID_w4": {
+      "description": "Series II's ID_w4: identity: the raw 4-position window as channels, affine + ReLU, DeepCpG tail",
+      "model": "classical_network",
+      "options": {
+        "front": "identity",
+        "window_length": 4,
+        "activation": "affine_relu"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "bases"
+    },
+    "classical_tail/ID_w64": {
+      "description": "Series II's ID_w64: identity: the raw 64-position window as channels, affine + ReLU, DeepCpG tail",
+      "model": "classical_network",
+      "options": {
+        "front": "identity",
+        "window_length": 64,
+        "activation": "affine_relu"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "bases"
+    },
+    "classical_tail/ID_w8": {
+      "description": "Series II's ID_w8: identity: the raw 8-position window as channels, affine + ReLU, DeepCpG tail",
+      "model": "classical_network",
+      "options": {
+        "front": "identity",
+        "window_length": 8,
+        "activation": "affine_relu"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "bases"
+    },
+    "classical_tail/LR_1": {
+      "description": "Series II's LR_1: rank-1 conv of 16 positions into 64 channels + ReLU, DeepCpG tail",
+      "model": "classical_network",
+      "options": {
+        "front": "low_rank",
+        "window_length": 16,
+        "rank": 1,
+        "activation": "none"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "bases"
+    },
+    "classical_tail/LR_3": {
+      "description": "Series II's LR_3: rank-3 conv of 16 positions into 64 channels + ReLU, DeepCpG tail",
+      "model": "classical_network",
+      "options": {
+        "front": "low_rank",
+        "window_length": 16,
+        "rank": 3,
+        "activation": "none"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "bases"
+    },
+    "classical_tail/LR_9": {
+      "description": "Series II's LR_9: rank-9 conv of 16 positions into 64 channels + ReLU, DeepCpG tail",
+      "model": "classical_network",
+      "options": {
+        "front": "low_rank",
+        "window_length": 16,
+        "rank": 9,
+        "activation": "none"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "bases"
+    },
+    "classical_pooling/C_12": {
+      "description": "Series II's C_12: conv 12 x 16 + ReLU, pooling head",
+      "model": "classical_network",
+      "options": {
+        "front": "convolution",
+        "window_length": 16,
+        "filter_quantity": 12,
+        "activation": "none",
+        "tail": "pooling"
+      },
+      "training_settings": "pooling_head",
+      "input": "bases"
+    },
+    "classical_pooling/C_16": {
+      "description": "Series II's C_16: conv 16 x 16 + ReLU, pooling head",
+      "model": "classical_network",
+      "options": {
+        "front": "convolution",
+        "window_length": 16,
+        "filter_quantity": 16,
+        "activation": "none",
+        "tail": "pooling"
+      },
+      "training_settings": "pooling_head",
+      "input": "bases"
+    },
+    "classical_pooling/C_20": {
+      "description": "Series II's C_20: conv 20 x 16 + ReLU, pooling head",
+      "model": "classical_network",
+      "options": {
+        "front": "convolution",
+        "window_length": 16,
+        "filter_quantity": 20,
+        "activation": "none",
+        "tail": "pooling"
+      },
+      "training_settings": "pooling_head",
+      "input": "bases"
+    },
+    "classical_pooling/C_4": {
+      "description": "Series II's C_4: conv 4 x 16 + ReLU, pooling head",
+      "model": "classical_network",
+      "options": {
+        "front": "convolution",
+        "window_length": 16,
+        "filter_quantity": 4,
+        "activation": "none",
+        "tail": "pooling"
+      },
+      "training_settings": "pooling_head",
+      "input": "bases"
+    },
+    "classical_pooling/C_64": {
+      "description": "Series II's C_64: conv 64 x 16 + ReLU, pooling head",
+      "model": "classical_network",
+      "options": {
+        "front": "convolution",
+        "window_length": 16,
+        "filter_quantity": 64,
+        "activation": "none",
+        "tail": "pooling"
+      },
+      "training_settings": "pooling_head",
+      "input": "bases"
+    },
+    "classical_pooling/C_8": {
+      "description": "Series II's C_8: conv 8 x 16 + ReLU, pooling head",
+      "model": "classical_network",
+      "options": {
+        "front": "convolution",
+        "window_length": 16,
+        "filter_quantity": 8,
+        "activation": "none",
+        "tail": "pooling"
+      },
+      "training_settings": "pooling_head",
+      "input": "bases"
+    },
+    "classical_pooling/G_288": {
+      "description": "Series II's G_288: |Qx|^2 of 288 Givens rotations of the 16-position window, affine + ReLU, pooling head",
+      "model": "classical_network",
+      "options": {
+        "front": "givens",
+        "window_length": 16,
+        "angle_quantity": 288,
+        "activation": "affine_relu",
+        "tail": "pooling"
+      },
+      "training_settings": "pooling_head",
+      "input": "bases"
+    },
+    "classical_pooling/LR_1": {
+      "description": "Series II's LR_1: rank-1 conv of 16 positions into 64 channels + ReLU, pooling head",
+      "model": "classical_network",
+      "options": {
+        "front": "low_rank",
+        "window_length": 16,
+        "rank": 1,
+        "activation": "none",
+        "tail": "pooling"
+      },
+      "training_settings": "pooling_head",
+      "input": "bases"
+    },
+    "classical_pooling/LR_3": {
+      "description": "Series II's LR_3: rank-3 conv of 16 positions into 64 channels + ReLU, pooling head",
+      "model": "classical_network",
+      "options": {
+        "front": "low_rank",
+        "window_length": 16,
+        "rank": 3,
+        "activation": "none",
+        "tail": "pooling"
+      },
+      "training_settings": "pooling_head",
+      "input": "bases"
+    },
+    "classical_pooling/LR_9": {
+      "description": "Series II's LR_9: rank-9 conv of 16 positions into 64 channels + ReLU, pooling head",
+      "model": "classical_network",
+      "options": {
+        "front": "low_rank",
+        "window_length": 16,
+        "rank": 9,
+        "activation": "none",
+        "tail": "pooling"
+      },
+      "training_settings": "pooling_head",
+      "input": "bases"
+    },
+    "classical_pooling/MSC_quad": {
+      "description": "Series II's MSC_quad: quadrature-pair energies of 4 x 4, 3 x 8, 2 x 16, 1 x 32, affine + ReLU, pooling head",
+      "model": "classical_network",
+      "options": {
+        "front": "multi_scale",
+        "scales": [
+          [
+            4,
+            4
+          ],
+          [
+            8,
+            3
+          ],
+          [
+            16,
+            2
+          ],
+          [
+            32,
+            1
+          ]
+        ],
+        "mode": "quadrature",
+        "activation": "affine_relu",
+        "tail": "pooling"
+      },
+      "training_settings": "pooling_head",
+      "input": "bases"
+    },
+    "classical_pooling/MSC_relu": {
+      "description": "Series II's MSC_relu: conv + ReLU of 4 x 4, 4 x 8, 4 x 16, 2 x 32, pooling head",
+      "model": "classical_network",
+      "options": {
+        "front": "multi_scale",
+        "scales": [
+          [
+            4,
+            4
+          ],
+          [
+            8,
+            4
+          ],
+          [
+            16,
+            4
+          ],
+          [
+            32,
+            2
+          ]
+        ],
+        "mode": "relu",
+        "activation": "none",
+        "tail": "pooling"
+      },
+      "training_settings": "pooling_head",
+      "input": "bases"
+    },
+    "classical_whole/CNN2_gpool": {
+      "description": "Series II's CNN2_gpool: conv 64 x 11 + ReLU, max pool 4, conv 96 x 3 + ReLU, pooling head",
+      "model": "classical_network",
+      "options": {
+        "front": "two_layer",
+        "filter_quantities": [
+          64,
+          96
+        ],
+        "activation": "none",
+        "tail": "pooling"
+      },
+      "training_settings": "hybrid_whole_model",
+      "input": "bases"
+    },
+    "classical_whole/CNN_h12": {
+      "description": "Series II's CNN_h12: DeepCpG's CNN with 12 dense units",
+      "model": "classical_network",
+      "options": {
+        "front": "convolution",
+        "window_length": 11,
+        "filter_quantity": 128,
+        "activation": "none",
+        "hidden_layer_sizes": [
+          12
+        ]
+      },
+      "training_settings": "hybrid_whole_model",
+      "input": "bases"
+    },
+    "classical_whole/CNN_h16": {
+      "description": "Series II's CNN_h16: DeepCpG's CNN with 16 dense units",
+      "model": "classical_network",
+      "options": {
+        "front": "convolution",
+        "window_length": 11,
+        "filter_quantity": 128,
+        "activation": "none",
+        "hidden_layer_sizes": [
+          16
+        ]
+      },
+      "training_settings": "hybrid_whole_model",
+      "input": "bases"
+    },
+    "classical_whole/FL_lin": {
+      "description": "Series II's FL_lin: the 44 standardized sequence statistics into logistic regression",
+      "model": "feature_classifier",
+      "options": {
+        "hidden_layer_sizes": []
+      },
+      "training_settings": "pure_whole_model",
+      "input": "bases"
+    },
+    "classical_whole/FM_4": {
+      "description": "Series II's FM_4: the 44 standardized sequence statistics into an MLP of 4 ReLU units",
+      "model": "feature_classifier",
+      "options": {
+        "hidden_layer_sizes": [
+          4
+        ]
+      },
+      "training_settings": "pure_whole_model",
+      "input": "bases"
+    },
+    "classical_whole/FacM_r2": {
+      "description": "factorization machine of the one-hot sequence, rank 2: linear terms and 2 pairwise-interaction factors shared by the cells, weighted per cell",
+      "model": "factorization_machine",
+      "options": {
+        "rank": 2
+      },
+      "training_settings": "factorization_machine",
+      "input": "bases"
+    },
+    "classical_whole/FacM_r4": {
+      "description": "factorization machine of the one-hot sequence, rank 4: linear terms and 4 pairwise-interaction factors shared by the cells, weighted per cell",
+      "model": "factorization_machine",
+      "options": {
+        "rank": 4
+      },
+      "training_settings": "factorization_machine",
+      "input": "bases"
+    },
+    "classical_whole/FacM_r8": {
+      "description": "factorization machine of the one-hot sequence, rank 8: linear terms and 8 pairwise-interaction factors shared by the cells, weighted per cell",
+      "model": "factorization_machine",
+      "options": {
+        "rank": 8
+      },
+      "training_settings": "factorization_machine",
+      "input": "bases"
+    },
+    "classical_whole/OH_lin": {
+      "description": "Series II's OH_lin: the flattened one-hot sequence into logistic regression",
+      "model": "one_hot_classifier",
+      "options": {
+        "hidden_layer_sizes": []
+      },
+      "training_settings": "hybrid_whole_model",
+      "input": "bases"
+    },
+    "classical_whole/OH_mlp": {
+      "description": "Series II's OH_mlp: the flattened one-hot sequence into an MLP of 128 ReLU units, dropout 0.2",
+      "model": "one_hot_classifier",
+      "options": {
+        "hidden_layer_sizes": [
+          128
+        ]
+      },
+      "training_settings": "hybrid_whole_model",
+      "input": "bases"
+    },
+    "classical_tokens/K3_CNN": {
+      "description": "Series II's K3_CNN: DeepCpG's CNN (CnnL2h128): conv 128 x 11 + ReLU, DeepCpG tail",
+      "model": "classical_network",
+      "options": {
+        "front": "convolution",
+        "window_length": 11,
+        "filter_quantity": 128,
+        "activation": "none"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "cpg_kmer3"
+    },
+    "classical_tokens/K3_Cw2_3": {
+      "description": "Series II's K3_Cw2_3: conv 3 x 2 + ReLU, DeepCpG tail",
+      "model": "classical_network",
+      "options": {
+        "front": "convolution",
+        "window_length": 2,
+        "filter_quantity": 3,
+        "activation": "none"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "cpg_kmer3"
+    },
+    "classical_tokens/K3_E_3": {
+      "description": "Series II's K3_E_3: conv 3 x 1 + ReLU, DeepCpG tail",
+      "model": "classical_network",
+      "options": {
+        "front": "convolution",
+        "window_length": 1,
+        "filter_quantity": 3,
+        "activation": "none"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "cpg_kmer3"
+    },
+    "classical_tokens/K3_E_64": {
+      "description": "Series II's K3_E_64: conv 64 x 1 + ReLU, DeepCpG tail",
+      "model": "classical_network",
+      "options": {
+        "front": "convolution",
+        "window_length": 1,
+        "filter_quantity": 64,
+        "activation": "none"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "cpg_kmer3"
+    },
+    "classical_tokens/K3_E_7": {
+      "description": "Series II's K3_E_7: conv 7 x 1 + ReLU, DeepCpG tail",
+      "model": "classical_network",
+      "options": {
+        "front": "convolution",
+        "window_length": 1,
+        "filter_quantity": 7,
+        "activation": "none"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "cpg_kmer3"
+    },
+    "classical_tokens/K3_GE_72": {
+      "description": "Series II's K3_GE_72: |Qx|^2 of 72 Givens rotations of the 1-position window, affine + ReLU, DeepCpG tail",
+      "model": "classical_network",
+      "options": {
+        "front": "givens",
+        "window_length": 1,
+        "angle_quantity": 72,
+        "activation": "affine_relu"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "cpg_kmer3"
+    },
+    "classical_tokens/K3_ID": {
+      "description": "Series II's K3_ID: identity: the raw 1-position window as channels, affine + ReLU, DeepCpG tail",
+      "model": "classical_network",
+      "options": {
+        "front": "identity",
+        "window_length": 1,
+        "activation": "affine_relu"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "cpg_kmer3"
+    },
+    "classical_tokens/K3_IDw2": {
+      "description": "Series II's K3_IDw2: identity: the raw 2-position window as channels, affine + ReLU, DeepCpG tail",
+      "model": "classical_network",
+      "options": {
+        "front": "identity",
+        "window_length": 2,
+        "activation": "affine_relu"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "cpg_kmer3"
+    },
+    "classical_tokens/K4_CNN": {
+      "description": "Series II's K4_CNN: DeepCpG's CNN (CnnL2h128): conv 128 x 11 + ReLU, DeepCpG tail",
+      "model": "classical_network",
+      "options": {
+        "front": "convolution",
+        "window_length": 11,
+        "filter_quantity": 128,
+        "activation": "none"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "cpg_kmer4"
+    },
+    "classical_tokens/K4_E_2": {
+      "description": "Series II's K4_E_2: conv 2 x 1 + ReLU, DeepCpG tail",
+      "model": "classical_network",
+      "options": {
+        "front": "convolution",
+        "window_length": 1,
+        "filter_quantity": 2,
+        "activation": "none"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "cpg_kmer4"
+    },
+    "classical_tokens/K4_E_64": {
+      "description": "Series II's K4_E_64: conv 64 x 1 + ReLU, DeepCpG tail",
+      "model": "classical_network",
+      "options": {
+        "front": "convolution",
+        "window_length": 1,
+        "filter_quantity": 64,
+        "activation": "none"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "cpg_kmer4"
+    },
+    "classical_tokens/K4_GE_96": {
+      "description": "Series II's K4_GE_96: |Qx|^2 of 96 Givens rotations of the 1-position window, affine + ReLU, DeepCpG tail",
+      "model": "classical_network",
+      "options": {
+        "front": "givens",
+        "window_length": 1,
+        "angle_quantity": 96,
+        "activation": "affine_relu"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "cpg_kmer4"
+    },
+    "classical_tokens/K4_ID": {
+      "description": "Series II's K4_ID: identity: the raw 1-position window as channels, affine + ReLU, DeepCpG tail",
+      "model": "classical_network",
+      "options": {
+        "front": "identity",
+        "window_length": 1,
+        "activation": "affine_relu"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "cpg_kmer4"
+    },
+    "classical_tokens/P256_CNN": {
+      "description": "Series II's P256_CNN: DeepCpG's CNN (CnnL2h128): conv 128 x 11 + ReLU, DeepCpG tail",
+      "model": "classical_network",
+      "options": {
+        "front": "convolution",
+        "window_length": 11,
+        "filter_quantity": 128,
+        "activation": "none"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "painted256"
+    },
+    "classical_tokens/P256b_CNN": {
+      "description": "Series II's P256b_CNN: DeepCpG's CNN (CnnL2h128): conv 128 x 11 + ReLU, DeepCpG tail",
+      "model": "classical_network",
+      "options": {
+        "front": "convolution",
+        "window_length": 11,
+        "filter_quantity": 128,
+        "activation": "none"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "painted_bases256"
+    },
+    "classical_tokens/P64_CNN": {
+      "description": "Series II's P64_CNN: DeepCpG's CNN (CnnL2h128): conv 128 x 11 + ReLU, DeepCpG tail",
+      "model": "classical_network",
+      "options": {
+        "front": "convolution",
+        "window_length": 11,
+        "filter_quantity": 128,
+        "activation": "none"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "painted64"
+    },
+    "classical_tokens/P64_E_3": {
+      "description": "Series II's P64_E_3: conv 3 x 1 + ReLU, DeepCpG tail",
+      "model": "classical_network",
+      "options": {
+        "front": "convolution",
+        "window_length": 1,
+        "filter_quantity": 3,
+        "activation": "none"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "painted64"
+    },
+    "classical_tokens/P64_ID": {
+      "description": "Series II's P64_ID: identity: the raw 1-position window as channels, affine + ReLU, DeepCpG tail",
+      "model": "classical_network",
+      "options": {
+        "front": "identity",
+        "window_length": 1,
+        "activation": "affine_relu"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "painted64"
+    },
+    "classical_tokens/P64b_CNN": {
+      "description": "Series II's P64b_CNN: DeepCpG's CNN (CnnL2h128): conv 128 x 11 + ReLU, DeepCpG tail",
+      "model": "classical_network",
+      "options": {
+        "front": "convolution",
+        "window_length": 11,
+        "filter_quantity": 128,
+        "activation": "none"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "painted_bases64"
+    },
+    "classical_tokens/P64b_E_5": {
+      "description": "Series II's P64b_E_5: conv 5 x 1 + ReLU, DeepCpG tail",
+      "model": "classical_network",
+      "options": {
+        "front": "convolution",
+        "window_length": 1,
+        "filter_quantity": 5,
+        "activation": "none"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "painted_bases64"
+    },
+    "classical_tokens/P64b_ID": {
+      "description": "Series II's P64b_ID: identity: the raw 1-position window as channels, affine + ReLU, DeepCpG tail",
+      "model": "classical_network",
+      "options": {
+        "front": "identity",
+        "window_length": 1,
+        "activation": "affine_relu"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "painted_bases64"
+    },
+    "classical_tokens/T256_CNN": {
+      "description": "Series II's T256_CNN: DeepCpG's CNN (CnnL2h128): conv 128 x 11 + ReLU, DeepCpG tail",
+      "model": "classical_network",
+      "options": {
+        "front": "convolution",
+        "window_length": 11,
+        "filter_quantity": 128,
+        "activation": "none"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "cpg_bpe256"
+    },
+    "classical_tokens/T256_E_2": {
+      "description": "Series II's T256_E_2: conv 2 x 1 + ReLU, DeepCpG tail",
+      "model": "classical_network",
+      "options": {
+        "front": "convolution",
+        "window_length": 1,
+        "filter_quantity": 2,
+        "activation": "none"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "cpg_bpe256"
+    },
+    "classical_tokens/T256_E_3": {
+      "description": "Series II's T256_E_3: conv 3 x 1 + ReLU, DeepCpG tail",
+      "model": "classical_network",
+      "options": {
+        "front": "convolution",
+        "window_length": 1,
+        "filter_quantity": 3,
+        "activation": "none"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "cpg_bpe256"
+    },
+    "classical_tokens/T256_E_64": {
+      "description": "Series II's T256_E_64: conv 64 x 1 + ReLU, DeepCpG tail",
+      "model": "classical_network",
+      "options": {
+        "front": "convolution",
+        "window_length": 1,
+        "filter_quantity": 64,
+        "activation": "none"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "cpg_bpe256"
+    },
+    "classical_tokens/T256_GE_96": {
+      "description": "Series II's T256_GE_96: |Qx|^2 of 96 Givens rotations of the 1-position window, affine + ReLU, DeepCpG tail",
+      "model": "classical_network",
+      "options": {
+        "front": "givens",
+        "window_length": 1,
+        "angle_quantity": 96,
+        "activation": "affine_relu"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "cpg_bpe256"
+    },
+    "classical_tokens/T256_ID": {
+      "description": "Series II's T256_ID: identity: the raw 1-position window as channels, affine + ReLU, DeepCpG tail",
+      "model": "classical_network",
+      "options": {
+        "front": "identity",
+        "window_length": 1,
+        "activation": "affine_relu"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "cpg_bpe256"
+    },
+    "classical_tokens/T64_CNN": {
+      "description": "Series II's T64_CNN: DeepCpG's CNN (CnnL2h128): conv 128 x 11 + ReLU, DeepCpG tail",
+      "model": "classical_network",
+      "options": {
+        "front": "convolution",
+        "window_length": 11,
+        "filter_quantity": 128,
+        "activation": "none"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "cpg_bpe64"
+    },
+    "classical_tokens/T64_Cw2_2": {
+      "description": "Series II's T64_Cw2_2: conv 2 x 2 + ReLU, DeepCpG tail",
+      "model": "classical_network",
+      "options": {
+        "front": "convolution",
+        "window_length": 2,
+        "filter_quantity": 2,
+        "activation": "none"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "cpg_bpe64"
+    },
+    "classical_tokens/T64_Cw2_3": {
+      "description": "Series II's T64_Cw2_3: conv 3 x 2 + ReLU, DeepCpG tail",
+      "model": "classical_network",
+      "options": {
+        "front": "convolution",
+        "window_length": 2,
+        "filter_quantity": 3,
+        "activation": "none"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "cpg_bpe64"
+    },
+    "classical_tokens/T64_Cw4_3": {
+      "description": "Series II's T64_Cw4_3: conv 3 x 4 + ReLU, DeepCpG tail",
+      "model": "classical_network",
+      "options": {
+        "front": "convolution",
+        "window_length": 4,
+        "filter_quantity": 3,
+        "activation": "none"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "cpg_bpe64"
+    },
+    "classical_tokens/T64_Cw4_8": {
+      "description": "Series II's T64_Cw4_8: conv 8 x 4 + ReLU, DeepCpG tail",
+      "model": "classical_network",
+      "options": {
+        "front": "convolution",
+        "window_length": 4,
+        "filter_quantity": 8,
+        "activation": "none"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "cpg_bpe64"
+    },
+    "classical_tokens/T64_Cw8_3": {
+      "description": "Series II's T64_Cw8_3: conv 3 x 8 + ReLU, DeepCpG tail",
+      "model": "classical_network",
+      "options": {
+        "front": "convolution",
+        "window_length": 8,
+        "filter_quantity": 3,
+        "activation": "none"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "cpg_bpe64"
+    },
+    "classical_tokens/T64_E_3": {
+      "description": "Series II's T64_E_3: conv 3 x 1 + ReLU, DeepCpG tail",
+      "model": "classical_network",
+      "options": {
+        "front": "convolution",
+        "window_length": 1,
+        "filter_quantity": 3,
+        "activation": "none"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "cpg_bpe64"
+    },
+    "classical_tokens/T64_E_64": {
+      "description": "Series II's T64_E_64: conv 64 x 1 + ReLU, DeepCpG tail",
+      "model": "classical_network",
+      "options": {
+        "front": "convolution",
+        "window_length": 1,
+        "filter_quantity": 64,
+        "activation": "none"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "cpg_bpe64"
+    },
+    "classical_tokens/T64_E_7": {
+      "description": "Series II's T64_E_7: conv 7 x 1 + ReLU, DeepCpG tail",
+      "model": "classical_network",
+      "options": {
+        "front": "convolution",
+        "window_length": 1,
+        "filter_quantity": 7,
+        "activation": "none"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "cpg_bpe64"
+    },
+    "classical_tokens/T64_GE_72": {
+      "description": "Series II's T64_GE_72: |Qx|^2 of 72 Givens rotations of the 1-position window, affine + ReLU, DeepCpG tail",
+      "model": "classical_network",
+      "options": {
+        "front": "givens",
+        "window_length": 1,
+        "angle_quantity": 72,
+        "activation": "affine_relu"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "cpg_bpe64"
+    },
+    "classical_tokens/T64_ID": {
+      "description": "Series II's T64_ID: identity: the raw 1-position window as channels, affine + ReLU, DeepCpG tail",
+      "model": "classical_network",
+      "options": {
+        "front": "identity",
+        "window_length": 1,
+        "activation": "affine_relu"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "cpg_bpe64"
+    },
+    "classical_tokens/T64_IDw2": {
+      "description": "Series II's T64_IDw2: identity: the raw 2-position window as channels, affine + ReLU, DeepCpG tail",
+      "model": "classical_network",
+      "options": {
+        "front": "identity",
+        "window_length": 2,
+        "activation": "affine_relu"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "cpg_bpe64"
+    },
+    "classical_tokens/TF64_LR": {
+      "description": "Series II's TF64_LR: logistic regression on token frequencies, one output for all cells",
+      "model": "token_frequency_classifier",
+      "options": {},
+      "training_settings": "pure_whole_model",
+      "input": "cpg_bpe64"
+    },
+    "ceiling/O256": {
+      "description": "Series II's O256: |Wx|^2 of a trained rotation exp(S - S^T) W of the 64-position window, affine + ReLU, DeepCpG tail",
+      "model": "classical_network",
+      "options": {
+        "front": "dense",
+        "window_length": 64,
+        "matrix": "orthogonal",
+        "activation": "affine_relu"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "bases"
+    },
+    "ceiling/O64": {
+      "description": "Series II's O64: |Wx|^2 of a trained rotation exp(S - S^T) W of the 16-position window, affine + ReLU, DeepCpG tail",
+      "model": "classical_network",
+      "options": {
+        "front": "dense",
+        "window_length": 16,
+        "matrix": "orthogonal",
+        "activation": "affine_relu"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "bases"
+    },
+    "ceiling/U256": {
+      "description": "Series II's U256: |Wx|^2 of a trained unitary exp(iH) W of the 64-position window, affine + ReLU, DeepCpG tail",
+      "model": "classical_network",
+      "options": {
+        "front": "dense",
+        "window_length": 64,
+        "matrix": "unitary",
+        "activation": "affine_relu"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "bases"
+    },
+    "ceiling/U64": {
+      "description": "Series II's U64: |Wx|^2 of a trained unitary exp(iH) W of the 16-position window, affine + ReLU, DeepCpG tail",
+      "model": "classical_network",
+      "options": {
+        "front": "dense",
+        "window_length": 16,
+        "matrix": "unitary",
+        "activation": "affine_relu"
+      },
+      "training_settings": "deepcpg_tail",
       "input": "bases"
     }
   }

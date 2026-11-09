@@ -1,14 +1,3 @@
-# Must change the following in pennylane/qnn/torch.py
-# - # reshape to the correct number of dimensions
-# - if has_batch_dim:
-# -     results = torch.reshape(results, (batch_dims, *results.shape[1:]))
-#
-# def _combine_dimensions(_res):
-#   if len(x.shape) > 1:
-# -     _res = [torch.reshape(r, (x.shape[0], -1)) for r in _res]
-# - return torch.hstack(_res).type(x.dtype)
-# + return torch.stack(_res).type(x.dtype)
-
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
@@ -315,6 +304,18 @@ def _measure(
     raise ValueError(f"Unknown measurement type {measurement}")
 
 
+class SequenceTorchLayer(qp.qnn.TorchLayer):
+    """
+    A TorchLayer whose inputs end in a sequence of vectors.
+
+    TorchLayer reads every input dimension but the last as a batch, so each
+    sequence is flattened into one vector, which the QNode unflattens.
+    """
+
+    def forward(self, inputs: Tensor) -> Tensor:
+        return super().forward(inputs.flatten(-2))
+
+
 def _convert_qnode_to_torch_layer(
     qnode: Callable[Tensor, Tensor],
     quantum_layer_quantity: int,
@@ -339,7 +340,7 @@ def _convert_qnode_to_torch_layer(
     else:
         raise ValueError(f"Unknown entangling layer type {entangling}")
 
-    return qp.qnn.TorchLayer(qnode, weights)
+    return SequenceTorchLayer(qnode, weights)
 
 
 def _torch_qnn_layer(
@@ -384,7 +385,7 @@ def _torch_qnn_layer(
     @qp.qnode(device, interface="torch", diff_method=diff_method)
     def _qnode(inputs: Tensor, weights: Tensor):
         _encode_all_nucleotides(
-            inputs,
+            inputs.unflatten(-1, (-1, 2**embedding_qubit_quantity)),
             sequence_length,
             address_register_size,
             embedding_qubit_quantity=embedding_qubit_quantity,
@@ -453,6 +454,7 @@ def _torch_rqnn_layer(
         diff_method=diff_method,
     )
     def _rqnn_circuit(inputs: Tensor, weights: Tensor) -> None:
+        inputs = inputs.unflatten(-1, (-1, 2**embedding_qubit_quantity))
         if len(inputs.shape) == 2:
             for embedding in inputs:
                 qp.AmplitudeEmbedding(

@@ -53,10 +53,18 @@ changes per sample run as QNodes on the device given by `--device-name`.
 | `automaton` | pure quantum automata (AU\_\*, Series I A1, A2) |
 | `global_circuit` | the whole sequence in one 12-qubit circuit, pure or with a dense head (GP\_\*, G\*, Series I L1, L2) |
 | `cnn_quantum_head` | DeepCpG's CNN with a re-uploading output circuit (H1\*) |
+| `classical_network` | classical: a classical first layer before DeepCpG's tail or the pooling head: convolutions (CNN, C\_\*, CNN2), the raw window (ID\_\*), low-rank (LR\_\*), Givens (G\_\*), multi-scale and quadrature-pair (MSC\_\*, Cq\_\*) and dense-matrix (FC\*, FR\*) layers, and the ceilings U64, O64, U256, O256 |
+| `feature_classifier` | classical: the 44 sequence statistics into a linear layer or an MLP (FL\_lin, FM\_4) |
+| `one_hot_classifier` | classical: the flattened sequence into a linear layer or an MLP (OH\_\*) |
+| `token_frequency_classifier` | classical: logistic regression on token frequencies (TF64\_LR) |
+| `factorization_machine` | classical: linear terms and rank-r pairwise interactions of the one-hot sequence (FacM\_r\*) |
 
-`config/quantum_models.json` holds every pure and hybrid model of the report
-as a preset, `<section>/<report name>`, with its options and the training
-settings of its main results table. List them with
+`config/quantum_models.json` holds every pure and hybrid model of the report,
+and the classical models of its matched comparisons (`classical_tail/`,
+`classical_pooling/`, `classical_whole/`, `classical_tokens/`) and the
+ceilings of its filter banks (`ceiling/`), as a preset,
+`<section>/<report name>`, with its options and the training settings of its
+main results table. List them with
 `python scripts/train_quantum_model.py --list-presets`.
 
 ## Training

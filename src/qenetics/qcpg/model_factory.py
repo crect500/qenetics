@@ -17,6 +17,13 @@ from typing import Any
 from torch import Tensor, nn
 
 from qenetics.circuits import device_utils
+from qenetics.qcpg.classical_models import (
+    ClassicalNetwork,
+    FactorizationMachine,
+    FeatureClassifier,
+    OneHotClassifier,
+    TokenFrequencyClassifier,
+)
 from qenetics.qcpg.hybrid_models import (
     CNNQuantumHead,
     FilterBankNetwork,
@@ -43,7 +50,25 @@ MODEL_FAMILIES: dict[str, type[SequenceModel]] = {
     "automaton": QuantumAutomaton,
     "global_circuit": GlobalCircuitModel,
     "cnn_quantum_head": CNNQuantumHead,
+    "classical_network": ClassicalNetwork,
+    "feature_classifier": FeatureClassifier,
+    "one_hot_classifier": OneHotClassifier,
+    "token_frequency_classifier": TokenFrequencyClassifier,
+    "factorization_machine": FactorizationMachine,
 }
+# The families of the classical references and ceilings, which have no
+# circuit.
+CLASSICAL_FAMILIES: frozenset[str] = frozenset(
+    {
+        "classical_network",
+        "feature_classifier",
+        "one_hot_classifier",
+        "token_frequency_classifier",
+        "factorization_machine",
+    }
+)
+# The modules of a model's first layer, whose parameters are its front end.
+FRONT_END_MODULES: tuple[str, ...] = ("front_end", "activation")
 # Parameters every model is given by `build_model` rather than options.
 _BUILD_PARAMETERS: frozenset[str] = frozenset(
     {"self", "sequence_length", "output_quantity", "device_name", "diff_method"}
@@ -157,6 +182,28 @@ def count_parameters(model: nn.Module) -> tuple[int, int]:
         else:
             classical += parameter.numel()
     return quantum, classical
+
+
+def model_sizes(model: nn.Module) -> tuple[int, int]:
+    """
+    Measure a model as the report's matched comparisons do.
+
+    Returns
+    -------
+    The trained parameters of its first layer (`FRONT_END_MODULES`), or of
+    the whole model if it has none, and of the whole model.
+    """
+    front_end: int = 0
+    total: int = 0
+    for name, parameter in model.named_parameters():
+        if parameter.requires_grad:
+            total += parameter.numel()
+            if name.split(".")[0] in FRONT_END_MODULES:
+                front_end += parameter.numel()
+    has_front_end: bool = any(
+        hasattr(model, module) for module in FRONT_END_MODULES
+    )
+    return (front_end if has_front_end else total), total
 
 
 def set_evaluation_shots(model: nn.Module, shots: int) -> None:

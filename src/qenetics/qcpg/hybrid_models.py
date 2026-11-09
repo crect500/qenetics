@@ -504,11 +504,13 @@ class CNNQuantumHead(SequenceModel):
             angles = (pi / 2) * activations.unsqueeze(1).expand(
                 -1, self.upload_quantity, -1
             )
+        # The circuit starts from |0>, which default.qubit prepares on the CPU,
+        # so it runs there; gradients flow back through the device moves.
         expectations: Tensor = torch.stack(
-            list(self.qnode(angles, self.circuit_weights)), -1
+            list(self.qnode(angles.cpu(), self.circuit_weights.cpu())), -1
         )[:, self.readout_indices]
         return wire_probabilities(
-            expectations.to(channels.dtype),
+            expectations.to(device=channels.device, dtype=channels.dtype),
             self.shots,
             is_training=self.training,
         )
