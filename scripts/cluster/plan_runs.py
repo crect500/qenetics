@@ -5,17 +5,27 @@ The plan's experiments with the repository's presets, under its shared
 protocol (early stopping on mean per-cell validation AUC, capped at 25
 epochs; collapsed runs rerun with seed + 10):
 
-- full: every preset without a full-dataset run in the report, on its full
-  training sets, 3 seeds.
+- full: every preset on its full training sets, 3 seeds: the circuit models,
+  the classical models of the report's matched comparisons
+  (`classical_*/`), the ceilings (`ceiling/`) and the factorization
+  machines.
 - E4: the angle-matched real wide banks with the average pool, split A.
-- E12: 4-fold chromosome cross-validation of Q_L320 on every site, 1 seed.
-- E13: Q_L320 on the 2i and serum sets widened to every other autosome.
+- E12: 4-fold chromosome cross-validation of Q_L320 and the classical
+  references (DeepCpG's CNN, C_w4_170, C_w8_90 and U64) on every site, 1
+  seed.
+- E13: Q_L320 on the 2i and serum sets widened to every other autosome, 2
+  seeds.
 - Q1: the global circuits G1_lin_ry and G3_mlp_ry, split A.
+- LR1e-2, LR3e-3, LR1e-3, LR3e-4: the factorization machines' learning-rate
+  sweep on the full training sets of HCC and 2i. Their full runs wait for it
+  and use the rate with the best mean validation score.
+- splitC: the best quantum models and DeepCpG's CNN, with this protocol's and
+  with DeepCpG's settings, on DeepCpG's own split.
 
 `submit` plans these runs, and the token inputs the token presets read, as a
 queue in the output directory. It then submits whole-node jobs, at most
 --gpu-nodes on the GPU partition and --cpu-nodes on the CPU partition at a
-time. Their workers, one per GPU or --cpu-workers-per-node per CPU node, take
+time, and at most 16 nodes in all, the cluster's per-user limit. Their workers, one per GPU or --cpu-workers-per-node per CPU node, take
 entries from the queue until none is left:
 
 - GPU workers take the longest runs first. CPU workers write the token inputs,
@@ -26,14 +36,32 @@ entries from the queue until none is left:
   skips those, so submitting again resumes after failures and time limits,
   and adds the reruns of runs that collapsed.
 
+With --close-gaps, `submit` also adds seeds 3 and 4 to every quantum model
+within 0.005 of a classical model it is compared with, and to that model.
+
+`summarize` writes one row per recorded run, with its best epoch and test
+AUCs, to summary.tsv in the output directory. `compare` runs the paired
+bootstrap (`qenetics.tools.bootstrap`) of the matched comparisons on the
+full training sets: every quantum model against the classical model of its
+kind with the best mean validation score among those with at most 1.25 times
+its trained parameters, counted on the first layer (the front-end table) and
+on the whole model (the total table). It also compares the complex circuits
+with their real twins (config/complex_real_pairs.json) and, in the other
+experiments, every quantum model with each classical model beside it, and
+writes every run's per-cell AUPRC and Matthews correlation, into the
+comparisons folder.
+
     python scripts/cluster/plan_runs.py submit \\
         --data-directories /data/2i /data/hcc /data/hepg2 /data/ser \\
         /data/mESC --output-directory /scratch/qcpg
     python scripts/cluster/plan_runs.py status /scratch/qcpg
+    python scripts/cluster/plan_runs.py summarize /scratch/qcpg
+    python scripts/cluster/plan_runs.py compare /scratch/qcpg --processes 40
     python scripts/build_training_report.py -r /scratch/qcpg/full/records
 """
 
 import getpass
+import hashlib
 import inspect
 import json
 import math
@@ -45,17 +73,21 @@ import statistics
 import subprocess
 import sys
 import time
+import zlib
 from argparse import ArgumentParser, Namespace
-from collections import Counter
+from collections import Counter, defaultdict
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import datetime
 from fnmatch import fnmatchcase
+from multiprocessing import Pool
 from pathlib import Path
 from typing import Any
 
-from qenetics.qcpg import model_factory, qcpg, records
-from qenetics.tools import data, tokenization
+import numpy as np
+
+from qenetics.qcpg import heads, model_factory, qcpg, records
+from qenetics.tools import bootstrap, data, tokenization
 
 REPOSITORY: Path = Path(__file__).resolve().parents[2]
 CLUSTER_DIRECTORY: Path = Path(__file__).resolve().parent
@@ -76,8 +108,37 @@ TEMPLATES: dict[str, Path] = {
 # The job names set by the templates, which find a campaign's jobs.
 JOB_NAMES: dict[str, str] = {GPU: "qcpg-pool-gpu", CPU: "qcpg-pool-cpu"}
 GPUS_PER_NODE: int = 4
-# Presets whose full-dataset runs are in the report.
-REPORTED_PRESETS: list[str] = ["deepcpg_tail/Q_L320", "whole_model/H1b_cnnq_ry"]
+# The cluster's per-user limits: at most this many nodes at once, CPU and GPU
+# nodes together (its CPU quota allows 16 CPU nodes, or 12 beside 4 GPU
+# nodes), and at most this many GPU nodes.
+MAX_NODES: int = 16
+MAX_GPU_NODES: int = 4
+PAIRS_FILEPATH: Path = REPOSITORY / "config" / "complex_real_pairs.json"
+# The sections of the classical models, and of the ceilings: the dense
+# matrices the circuits' first layers can reach, which are references but not
+# comparators of the matched comparisons.
+CLASSICAL_PREFIX: str = "classical_"
+CEILING_SECTION: str = "ceiling/"
+CLASSICAL_REFERENCES: tuple[str, ...] = (
+    "classical_tail/CNN",
+    "classical_tail/C_w4_170",
+    "classical_tail/C_w8_90",
+    "ceiling/U64",
+)
+FACTORIZATION_MACHINES: tuple[str, ...] = (
+    "classical_whole/FacM_r2",
+    "classical_whole/FacM_r4",
+    "classical_whole/FacM_r8",
+)
+# The plan tunes every new model family with these learning rates on the full
+# training sets of these datasets, then trains it with the rate of the best
+# mean validation score.
+SWEEP_LEARNING_RATES: tuple[float, ...] = (1e-2, 3e-3, 1e-3, 3e-4)
+SWEEP_DATASETS: frozenset[str] = frozenset({"hcc", "2i"})
+SWEPT_PRESETS: tuple[str, ...] = FACTORIZATION_MACHINES
+# --close-gaps adds these seeds to comparisons within this AUC.
+CLOSE_GAP_SEEDS: tuple[int, ...] = (3, 4)
+CLOSE_GAP_TOLERANCE: float = 0.005
 COMPLETED_FILENAME: str = "COMPLETED"
 ENTRIES_FILENAME: str = "entries.jsonl"
 QUEUE_FILENAME: str = "queue.json"
@@ -115,6 +176,9 @@ SPLIT_A_TRAINING: dict[str, list[str]] = {
 # The scBS datasets, which split A tests on chromosome 2 only.
 SCBS_DATASETS: set[str] = {"2i", "ser"}
 FOLD_QUANTITY: int = 4
+# DeepCpG's own holdout, which validates on the other autosomes.
+SPLIT_C_TRAINING: list[str] = ["1", "3", "5", "7", "9", "11"]
+SPLIT_C_TEST: list[str] = ["2", "4", "6", "8", "10", "12"]
 
 
 def _split(
@@ -148,6 +212,26 @@ def split_a(
     ]
 
 
+def split_c(
+    dataset: str, autosomes: list[str]
+) -> list[tuple[str, Chromosomes]]:
+    """
+    DeepCpG's holdout: training on chromosomes 1, 3, 5, 7, 9 and 11, testing
+    on 2, 4, 6, 8, 10 and 12, and validating on the other autosomes.
+    """
+    held_out: set[str] = {*SPLIT_C_TRAINING, *SPLIT_C_TEST}
+    return [
+        (
+            "",
+            _split(
+                SPLIT_C_TRAINING,
+                [c for c in autosomes if c not in held_out],
+                SPLIT_C_TEST,
+            ),
+        )
+    ]
+
+
 def full_training_sets(
     dataset: str, autosomes: list[str]
 ) -> list[tuple[str, Chromosomes]]:
@@ -167,6 +251,17 @@ def full_training_sets(
         ]
     )
     return [("", _split(training, [VALIDATION_CHROMOSOME], test))]
+
+
+def sweep_training_sets(
+    dataset: str, autosomes: list[str]
+) -> list[tuple[str, Chromosomes]]:
+    """The full training sets of the learning-rate sweep's datasets only."""
+    return (
+        full_training_sets(dataset, autosomes)
+        if dataset in SWEEP_DATASETS
+        else []
+    )
 
 
 def widened_training_sets(
@@ -233,6 +328,8 @@ class Experiment:
         subset.
     deduplicated: Leave out the presets of --exclude and those that build
         the same model on the same input as an earlier preset.
+    learning_rate: The learning rate of every run, instead of the preset's,
+        for a learning-rate sweep.
     """
 
     description: str
@@ -241,13 +338,18 @@ class Experiment:
     splits: SplitFunction
     all_sites: bool
     deduplicated: bool = False
+    learning_rate: float | None = None
 
 
-# The quantum experiments of the training plan that the presets cover. Its
-# QFT, attention and Gray-code models (Q2-Q4) are not presets.
+def _sweep_name(learning_rate: float) -> str:
+    return f"LR{learning_rate:.0e}".replace("e-0", "e-")
+
+
+# The experiments of the training plan that the presets cover. Its QFT,
+# attention and Gray-code models (Q2-Q4) are not presets.
 EXPERIMENTS: dict[str, Experiment] = {
     "full": Experiment(
-        "every preset without a full-dataset run, on the full training sets",
+        "every preset on the full training sets",
         ("*",),
         (0, 1, 2),
         full_training_sets,
@@ -262,8 +364,9 @@ EXPERIMENTS: dict[str, Experiment] = {
         all_sites=False,
     ),
     "E12": Experiment(
-        "4-fold chromosome cross-validation of the best quantum model",
-        ("deepcpg_tail/Q_L320",),
+        "4-fold chromosome cross-validation of the best quantum model and the "
+        "classical references",
+        ("deepcpg_tail/Q_L320", *CLASSICAL_REFERENCES),
         (0,),
         chromosome_folds,
         all_sites=True,
@@ -276,13 +379,40 @@ EXPERIMENTS: dict[str, Experiment] = {
         all_sites=True,
     ),
     "Q1": Experiment(
-        "the global circuits of the factorization machine comparison, split A",
+        "the real global circuits, split A",
         ("whole_model/G1_lin_ry", "whole_model/G3_mlp_ry"),
         (0, 1, 2),
         split_a,
         all_sites=False,
     ),
+    **{
+        _sweep_name(rate): Experiment(
+            f"the factorization machines' learning-rate sweep at {rate:g}",
+            SWEPT_PRESETS,
+            (0,),
+            sweep_training_sets,
+            all_sites=True,
+            learning_rate=rate,
+        )
+        for rate in SWEEP_LEARNING_RATES
+    },
+    "splitC": Experiment(
+        "the best quantum models and DeepCpG's CNN on DeepCpG's split",
+        (
+            "deepcpg_tail/Q_L128",
+            "deepcpg_tail/Q_L320",
+            "whole_model/H1b_cnnq",
+            "classical_tail/CNN",
+            "classical_tail/CNN_deepcpg",
+        ),
+        (0, 1, 2),
+        split_c,
+        all_sites=True,
+    ),
 }
+SWEEP_EXPERIMENTS: tuple[str, ...] = tuple(
+    _sweep_name(rate) for rate in SWEEP_LEARNING_RATES
+)
 
 
 @dataclass
@@ -379,10 +509,8 @@ def _parse_script_args(arguments: list[str] | None = None) -> Namespace:
     submit.add_argument(
         "--exclude",
         nargs="*",
-        default=REPORTED_PRESETS,
-        help="Presets or patterns the full experiment leaves out. Defaults to "
-        f"those whose full-dataset runs are in the report: "
-        f"{', '.join(REPORTED_PRESETS)}.",
+        default=[],
+        help="Presets or patterns the full experiment leaves out.",
     )
     submit.add_argument(
         "--keep-duplicates",
@@ -410,19 +538,36 @@ def _parse_script_args(arguments: list[str] | None = None) -> Namespace:
         help="Stop after this many epochs without validation gain, or the "
         "preset's patience if more.",
     )
+    submit.add_argument(
+        "--close-gaps",
+        action="store_true",
+        help=f"Add seeds {', '.join(map(str, CLOSE_GAP_SEEDS))} to every "
+        "quantum model within --close-gap-tolerance of its matched classical "
+        "comparators on the full training sets, or of the best classical "
+        "model of its experiment, cell type and fold elsewhere, and to those "
+        "models.",
+    )
+    submit.add_argument(
+        "--close-gap-tolerance",
+        type=float,
+        default=CLOSE_GAP_TOLERANCE,
+        help="The AUC gap below which --close-gaps adds seeds.",
+    )
     submit.add_argument("--gpu-partition", default="gpu")
     submit.add_argument("--cpu-partition", default="main")
     submit.add_argument(
         "--gpu-nodes",
         type=int,
-        default=4,
-        help=f"The most GPU nodes ({GPUS_PER_NODE} GPUs each) to use at once.",
+        default=MAX_GPU_NODES,
+        help=f"The most GPU nodes ({GPUS_PER_NODE} GPUs each) to use at once, "
+        f"at most {MAX_GPU_NODES}.",
     )
     submit.add_argument(
         "--cpu-nodes",
         type=int,
-        default=40,
-        help="The most CPU nodes to use at once.",
+        help="The most CPU nodes to use at once. Defaults to the rest of the "
+        f"{MAX_NODES}-node limit beside the GPU nodes used: {MAX_NODES} without "
+        f"GPU nodes, {MAX_NODES - MAX_GPU_NODES} beside {MAX_GPU_NODES}.",
     )
     submit.add_argument(
         "--cpu-workers-per-node",
@@ -468,6 +613,67 @@ def _parse_script_args(arguments: list[str] | None = None) -> Namespace:
         help="The queue, a folder of <output directory>/queues. Defaults to "
         "the latest.",
     )
+    summarize = commands.add_parser(
+        "summarize",
+        help="Write one row per recorded run, with its test AUCs, as "
+        "tab-separated values.",
+    )
+    summarize.add_argument(
+        "output_directory", type=Path, help="The output directory of submit."
+    )
+    summarize.add_argument(
+        "-o",
+        "--output",
+        type=Path,
+        help=f"The file to write. Defaults to {SUMMARY_FILENAME} in the "
+        "output directory.",
+    )
+    compare = commands.add_parser(
+        "compare",
+        help="Bootstrap the matched comparisons of the full training sets, "
+        "the complex and real twins, and the other experiments' quantum and "
+        "classical models, and compute every run's AUPRC and MCC.",
+    )
+    compare.add_argument(
+        "output_directory", type=Path, help="The output directory of submit."
+    )
+    compare.add_argument(
+        "--replicates",
+        type=int,
+        default=1000,
+        help="The bootstrap replicates.",
+    )
+    compare.add_argument(
+        "--sites",
+        type=int,
+        default=200_000,
+        help="The most test sites the bootstrap resamples: a fixed random "
+        "sample of each test set, the same for every model on it.",
+    )
+    compare.add_argument(
+        "--processes", type=int, default=1, help="The processes to use."
+    )
+    compare.add_argument(
+        "--pair",
+        nargs=2,
+        action="append",
+        default=[],
+        metavar=("A", "B"),
+        help="Also compare preset A with preset B wherever both ran on the "
+        "same test set. Repeat for more.",
+    )
+    compare.add_argument(
+        "--presets-file",
+        type=Path,
+        default=PRESETS_FILEPATH,
+        help="The presets file, whose models the matched comparisons measure.",
+    )
+    compare.add_argument(
+        "--pairs-file",
+        type=Path,
+        default=PAIRS_FILEPATH,
+        help="The complex circuit models and their real twins to compare.",
+    )
     work = commands.add_parser(
         "work",
         help="Run entries of a queue until none is left; started by the node "
@@ -483,10 +689,19 @@ def _parse_script_args(arguments: list[str] | None = None) -> Namespace:
     )
     args: Namespace = parser.parse_args(arguments)
     if args.command == "submit" and (
-        min(args.gpu_nodes, args.cpu_nodes) < 0 or args.cpu_workers_per_node < 1
+        min(args.gpu_nodes, args.cpu_nodes or 0) < 0
+        or args.cpu_workers_per_node < 1
     ):
         parser.error(
             "node quantities must not be negative, and CPU nodes need workers"
+        )
+    if args.command == "submit" and (
+        args.gpu_nodes > MAX_GPU_NODES
+        or args.gpu_nodes + (args.cpu_nodes or 0) > MAX_NODES
+    ):
+        parser.error(
+            f"the cluster allows at most {MAX_NODES} nodes at once, at most "
+            f"{MAX_GPU_NODES} of them GPU nodes"
         )
     if args.command == "work" and (args.resources == GPU) != (
         args.gpu is not None
@@ -909,23 +1124,34 @@ def collapsed_runs(records_directories: Iterable[Path]) -> set[str]:
             continue
         for run_directory in records.find_run_directories(records_directory):
             run: dict[str, Any] = records.read_run(run_directory)
-            aucs: list[float] = [
-                cell["auc"]
-                for cell in run["metrics"]
-                .get(records.TEST_SPLIT, {})
-                .get("cells", [])
-                if isinstance(cell["auc"], int | float)
-                and math.isfinite(cell["auc"])
-            ]
-            if run["status"] == records.STATUS_COMPLETED and aucs:
-                test_aucs[str(run["parameters"]["output_directory"])] = (
-                    statistics.fmean(aucs)
-                )
+            auc: float = _test_mean_cell_auc(run)
+            if run["status"] == records.STATUS_COMPLETED and math.isfinite(auc):
+                test_aucs[str(run["parameters"]["output_directory"])] = auc
     return {
-        directory
-        for directory, auc in test_aucs.items()
-        if abs(auc - 0.5) <= COLLAPSE_TOLERANCE
+        directory for directory, auc in test_aucs.items() if _is_collapsed(auc)
     }
+
+
+def mean_cell_auc(aucs: Iterable[float]) -> float:
+    """The mean of cells' AUCs over the defined ones; NaN if none is."""
+    defined: list[float] = [
+        auc
+        for auc in aucs
+        if isinstance(auc, int | float) and math.isfinite(auc)
+    ]
+    return statistics.fmean(defined) if defined else math.nan
+
+
+def _test_mean_cell_auc(run: dict[str, Any]) -> float:
+    """The mean per-cell test AUC of a run read by `records.read_run`."""
+    return mean_cell_auc(
+        cell["auc"]
+        for cell in run["metrics"].get(records.TEST_SPLIT, {}).get("cells", [])
+    )
+
+
+def _is_collapsed(test_mean_cell_auc: float) -> bool:
+    return abs(test_mean_cell_auc - 0.5) <= COLLAPSE_TOLERANCE
 
 
 def _training_entry(
@@ -975,6 +1201,384 @@ def _training_entry(
     }
 
 
+def is_swept(name: str) -> bool:
+    """Whether a preset takes its learning rate from the sweep."""
+    return any(fnmatchcase(name, pattern) for pattern in SWEPT_PRESETS)
+
+
+def swept_learning_rates(output_directory: Path) -> dict[str, float]:
+    """
+    Choose the learning rate of each swept preset.
+
+    Args
+    ----
+    output_directory: The output directory of `submit`.
+
+    Returns
+    -------
+    For each preset with a completed sweep run at every rate on every sweep
+    dataset, the rate with the best mean validation score over the datasets.
+    """
+    scores: dict[str, dict[str, dict[str, float]]] = defaultdict(
+        lambda: defaultdict(dict)
+    )
+    for row in summarize_runs(output_directory):
+        if (
+            row["experiment"] in SWEEP_EXPERIMENTS
+            and row["status"] == records.STATUS_COMPLETED
+        ):
+            score: float = row["best_validation_score"]
+            scores[row["preset"]][row["experiment"]][row["dataset"].lower()] = (
+                score if math.isfinite(score) else -math.inf
+            )
+    rates: dict[str, float] = {}
+    for preset, by_sweep in scores.items():
+        means: dict[str, float] = {
+            name: statistics.fmean(by_dataset[d] for d in SWEEP_DATASETS)
+            for name, by_dataset in by_sweep.items()
+            if SWEEP_DATASETS <= set(by_dataset)
+        }
+        if len(means) == len(SWEEP_EXPERIMENTS):
+            rate: float | None = EXPERIMENTS[
+                max(means, key=means.get)
+            ].learning_rate
+            if rate is not None:
+                rates[preset] = rate
+    return rates
+
+
+def is_reference(name: str) -> bool:
+    """Whether a preset is a classical model or a ceiling, without a circuit."""
+    return name.startswith((CLASSICAL_PREFIX, CEILING_SECTION))
+
+
+@dataclass(frozen=True)
+class ModelSize:
+    """
+    A model's trained parameters, as the matched comparisons count them.
+
+    Attributes
+    ----------
+    front_end: Those of its first layer, or of the whole model if it has
+        none (`model_factory.model_sizes`).
+    total: Those of the whole model.
+    kind: `TAIL_KIND`, `POOLING_KIND` or `WHOLE_KIND`: a first layer with
+        DeepCpG's tail (or another tail), one with the pooling head, or a
+        whole model.
+    input: Its input, `model_factory.BASES_STR` or a token input.
+    """
+
+    front_end: int
+    total: int
+    kind: str
+    input: str
+
+
+TAIL_KIND: str = "tail"
+POOLING_KIND: str = "pooling"
+WHOLE_KIND: str = "whole"
+# A matched comparator has at most this multiple of the quantum model's
+# trained parameters; a quantum lead counts only if a classical model of at
+# least the smaller multiple, a similar size, was among the candidates.
+MATCHED_SIZE_RATIO: float = 1.25
+SIMILAR_SIZE_RATIO: float = 0.8
+FRONT_END_TABLE: str = "front-end"
+TOTAL_TABLE: str = "total"
+# The experiments whose models are compared in matched pairs; the others
+# compare every quantum model with each classical model beside it.
+MATCHED_EXPERIMENTS: frozenset[str] = frozenset({"full"})
+
+
+def preset_size(preset: model_factory.Preset, record: Path) -> ModelSize:
+    """
+    Measure a preset's model as one of its runs built it.
+
+    Args
+    ----
+    preset: The preset.
+    record: The record of one of its runs, whose data it builds the model
+        for: the number of cells, and the token lookup of token inputs.
+
+    Returns
+    -------
+    The model's size.
+
+    Raises
+    ------
+    OSError or KeyError if the run's data cannot be read; ValueError if the
+    model cannot be built.
+    """
+    parameters: dict[str, Any] = records.read_run(record)["parameters"]
+    sequence_length, cell_quantity, token_attributes = data.read_h5_layout(
+        Path(parameters["data_directory"])
+        / f"chr{parameters['training_chromosomes'][0]}.h5"
+    )
+    encoding_options: dict[str, Any] = {}
+    if token_attributes:
+        encoding_options = {
+            "encoding": data.TOKEN_ENCODING_STR,
+            "token_lookup": tokenization.token_lookup(
+                str(token_attributes[data.TOKENIZATION_ATTRIBUTE]),
+                int(token_attributes[data.VOCABULARY_SIZE_ATTRIBUTE]),
+            ),
+        }
+    model = model_factory.build_model(
+        preset.model,
+        sequence_length,
+        cell_quantity,
+        options=preset.options,
+        **encoding_options,
+    )
+    front_end, total = model_factory.model_sizes(model)
+    kind: str = (
+        WHOLE_KIND
+        if not any(
+            hasattr(model, module) for module in model_factory.FRONT_END_MODULES
+        )
+        else POOLING_KIND
+        if isinstance(getattr(model, "tail", None), heads.PoolingHead)
+        else TAIL_KIND
+    )
+    return ModelSize(front_end, total, kind, preset.input)
+
+
+def measure_sizes(
+    rows: list[dict[str, Any]], presets: dict[str, model_factory.Preset]
+) -> dict[tuple[str, str], ModelSize]:
+    """
+    Measure the model of every preset run on each dataset.
+
+    Args
+    ----
+    rows: Rows of `summarize_runs`.
+    presets: The presets, indexed by name.
+
+    Returns
+    -------
+    The size of each (preset, dataset) model that could be built; the others
+    are printed.
+    """
+    records_of: dict[tuple[str, str], str] = {}
+    for row in rows:
+        records_of.setdefault((row["preset"], row["dataset"]), row["record"])
+    sizes: dict[tuple[str, str], ModelSize] = {}
+    for (name, dataset), record in sorted(records_of.items()):
+        if name not in presets:
+            print(f"Not measuring {name}: not in the presets file")
+            continue
+        try:
+            sizes[(name, dataset)] = preset_size(presets[name], Path(record))
+        except (OSError, KeyError, IndexError, ValueError) as error:
+            print(f"Not measuring {name} on {dataset}: {error}")
+    return sizes
+
+
+@dataclass(frozen=True)
+class MatchedPair:
+    """
+    A quantum model and its matched classical comparator.
+
+    Attributes
+    ----------
+    table: `FRONT_END_TABLE` or `TOTAL_TABLE`.
+    quantum, classical: The presets.
+    quantum_size, classical_size: Their trained parameters as the table
+        counts them.
+    scored: Whether a classical candidate of a similar size existed, or the
+        quantum model is not ahead; otherwise its lead is not scored.
+    """
+
+    table: str
+    quantum: str
+    classical: str
+    quantum_size: int
+    classical_size: int
+    scored: bool
+
+
+def matched_pairs(
+    means: dict[str, tuple[float, float]], sizes: dict[str, ModelSize]
+) -> list[MatchedPair]:
+    """
+    Match the quantum models of one experiment, cell type and fold with
+    classical models.
+
+    Each quantum model's candidates are the classical models (not the
+    ceilings) on its input and of its kind, and every classical model on its
+    input for whole models. The front-end table counts the trained parameters
+    of first layers, and of whole models for whole quantum models; the total
+    table counts those of whole models, for the quantum first layers. Among
+    the candidates with at most `MATCHED_SIZE_RATIO` times the quantum
+    model's parameters, smaller ones included, its comparator has the best
+    mean validation score.
+
+    Args
+    ----
+    means: The mean validation score and test AUC of each preset.
+    sizes: The size of each preset's model.
+
+    Returns
+    -------
+    The pairs, by table and quantum model.
+    """
+    pairs: list[MatchedPair] = []
+    for table in (FRONT_END_TABLE, TOTAL_TABLE):
+        for quantum in sorted(means):
+            size: ModelSize | None = sizes.get(quantum)
+            if is_reference(quantum) or size is None:
+                continue
+            if table == TOTAL_TABLE and size.kind == WHOLE_KIND:
+                continue
+
+            def count(name: str, *, by_total: bool) -> int:
+                return sizes[name].total if by_total else sizes[name].front_end
+
+            by_total: bool = table == TOTAL_TABLE or size.kind == WHOLE_KIND
+            quantity: int = count(quantum, by_total=by_total)
+            candidates: list[str] = [
+                name
+                for name in means
+                if name.startswith(CLASSICAL_PREFIX)
+                and name in sizes
+                and sizes[name].input == size.input
+                and (size.kind == WHOLE_KIND or sizes[name].kind == size.kind)
+                and count(name, by_total=by_total)
+                <= MATCHED_SIZE_RATIO * quantity
+            ]
+            if not candidates:
+                continue
+            best: str = max(
+                candidates,
+                key=lambda name: (
+                    means[name][0] if math.isfinite(means[name][0]) else -1.0,
+                    name,
+                ),
+            )
+            pairs.append(
+                MatchedPair(
+                    table,
+                    quantum,
+                    best,
+                    quantity,
+                    count(best, by_total=by_total),
+                    any(
+                        count(name, by_total=by_total)
+                        >= SIMILAR_SIZE_RATIO * quantity
+                        for name in candidates
+                    )
+                    or means[quantum][1] <= means[best][1],
+                )
+            )
+    return pairs
+
+
+def _usable(row: dict[str, Any]) -> bool:
+    """Whether a run of `summarize_runs` completed, did not collapse and is
+    not part of the learning-rate sweep."""
+    return (
+        row["status"] == records.STATUS_COMPLETED
+        and not row["collapsed"]
+        and math.isfinite(row["test_mean_cell_auc"])
+        and row["experiment"] not in SWEEP_EXPERIMENTS
+    )
+
+
+def _means(rows: list[dict[str, Any]]) -> tuple[float, float]:
+    """The mean validation score (over defined scores) and test AUC of runs."""
+    validation: list[float] = [
+        row["best_validation_score"]
+        for row in rows
+        if math.isfinite(row["best_validation_score"])
+    ]
+    return (
+        statistics.fmean(validation) if validation else math.nan,
+        statistics.fmean(row["test_mean_cell_auc"] for row in rows),
+    )
+
+
+def comparison_groups(
+    rows: list[dict[str, Any]],
+) -> dict[tuple[str, str, str], dict[str, list[dict[str, Any]]]]:
+    """The usable runs of each experiment, cell type and fold, by preset."""
+    groups: dict[tuple[str, str, str], dict[str, list[dict[str, Any]]]] = (
+        defaultdict(lambda: defaultdict(list))
+    )
+    for row in rows:
+        if _usable(row):
+            key = (row["experiment"], row["dataset"], row["fold"])
+            groups[key][row["preset"]].append(row)
+    return groups
+
+
+def close_gap_targets(
+    output_directory: Path, tolerance: float, presets_filepath: Path
+) -> dict[str, set[tuple[str, str, str]]]:
+    """
+    Find the comparisons too close to call with the seeds run so far.
+
+    A quantum model whose mean test AUC is at least a classical model's minus
+    `tolerance` is a target, and so is that classical model: its matched
+    comparators (`matched_pairs`) in `MATCHED_EXPERIMENTS`, and the best
+    classical model or ceiling of its experiment, cell type and fold
+    otherwise.
+
+    Args
+    ----
+    output_directory: The output directory of `submit`.
+    tolerance: The AUC gap.
+    presets_filepath: The presets file, whose models the matched comparisons
+        measure.
+
+    Returns
+    -------
+    The targets of each experiment, as (dataset, fold, preset).
+    """
+    rows: list[dict[str, Any]] = summarize_runs(output_directory)
+    groups = comparison_groups(rows)
+    sizes: dict[tuple[str, str], ModelSize] = {}
+    if any(key[0] in MATCHED_EXPERIMENTS for key in groups):
+        sizes = measure_sizes(
+            [
+                row
+                for row in rows
+                if _usable(row) and row["experiment"] in MATCHED_EXPERIMENTS
+            ],
+            model_factory.load_presets(presets_filepath),
+        )
+    targets: dict[str, set[tuple[str, str, str]]] = defaultdict(set)
+    for (experiment, dataset, fold), by_preset in groups.items():
+        means: dict[str, tuple[float, float]] = {
+            preset: _means(preset_rows)
+            for preset, preset_rows in by_preset.items()
+        }
+        pairs: list[tuple[str, str]]
+        if experiment in MATCHED_EXPERIMENTS:
+            pairs = [
+                (pair.quantum, pair.classical)
+                for pair in matched_pairs(
+                    means,
+                    {
+                        preset: sizes[(preset, dataset)]
+                        for preset in means
+                        if (preset, dataset) in sizes
+                    },
+                )
+            ]
+        else:
+            references: list[str] = [p for p in means if is_reference(p)]
+            if not references:
+                continue
+            best: str = max(references, key=lambda p: means[p][1])
+            pairs = [(p, best) for p in means if not is_reference(p)]
+        for quantum, classical in pairs:
+            if means[quantum][1] >= means[classical][1] - tolerance:
+                targets[experiment] |= {
+                    (dataset, fold, quantum),
+                    (dataset, fold, classical),
+                }
+    return targets
+
+
 def training_entries(
     experiment_name: str,
     dataset: Dataset,
@@ -987,6 +1591,8 @@ def training_entries(
     max_epochs: int,
     minimum_patience: int,
     presets_filepath: Path,
+    learning_rates: dict[str, float] | None = None,
+    extra_seeds: set[tuple[str, str, str]] | None = None,
 ) -> list[dict[str, Any]]:
     """
     Plan an experiment's runs on a dataset.
@@ -1009,6 +1615,9 @@ def training_entries(
     max_epochs: The epoch limit.
     minimum_patience: See `run_patience`.
     presets_filepath: The presets file.
+    learning_rates: The learning rate of presets that do not use their own,
+        unless the experiment sets one.
+    extra_seeds: (dataset, fold, preset) that also run `CLOSE_GAP_SEEDS`.
 
     Returns
     -------
@@ -1025,6 +1634,24 @@ def training_entries(
         check_chromosome_files(dataset, chromosomes)
         training_sites: int = dataset.sites(chromosomes[records.TRAINING_SPLIT])
         for preset in presets:
+            learning_rate: float | None = (
+                experiment.learning_rate
+                if experiment.learning_rate is not None
+                else (learning_rates or {}).get(preset.name)
+            )
+            preset_seeds: list[int] = list(
+                dict.fromkeys(
+                    [
+                        *seeds,
+                        *(
+                            CLOSE_GAP_SEEDS
+                            if (dataset.name, label, preset.name)
+                            in (extra_seeds or set())
+                            else ()
+                        ),
+                    ]
+                )
+            )
             data_directory: Path = (
                 dataset.directory
                 if preset.input == model_factory.BASES_STR
@@ -1048,6 +1675,11 @@ def training_entries(
                 str(run_patience(preset, minimum_patience)),
                 "--selection-metric",
                 qcpg.MEAN_CELL_AUC,
+                *(
+                    ["--learning-rate", f"{learning_rate:g}"]
+                    if learning_rate is not None
+                    else []
+                ),
             ]
             preset_directory: Path = (
                 experiment_directory
@@ -1055,7 +1687,7 @@ def training_entries(
                 / preset.name.replace("/", "__")
                 / label
             )
-            for seed in seeds:
+            for seed in preset_seeds:
                 run_seeds: list[int] = [seed]
                 if str(preset_directory / f"seed{seed}") in collapsed:
                     run_seeds.append(seed + REPLACEMENT_SEED_OFFSET)
@@ -1101,10 +1733,14 @@ def plan_entries(
     max_epochs: int,
     minimum_patience: int,
     presets_filepath: Path,
+    close_gap_tolerance: float | None = None,
 ) -> list[dict[str, Any]]:
     """
     Plan every entry of a queue: the token inputs, then the training runs,
     longest first.
+
+    Swept presets outside the sweep wait until it completes, and then use
+    its best rate (`swept_learning_rates`).
 
     Args
     ----
@@ -1114,13 +1750,39 @@ def plan_entries(
     output_directory: The root of the outputs.
     costs, max_epochs, minimum_patience, presets_filepath: See
         `training_entries`.
+    close_gap_tolerance: Add `CLOSE_GAP_SEEDS` to the targets of
+        `close_gap_targets` with this tolerance, or None for none.
 
     Returns
     -------
     The entries.
     """
     collapsed: set[str] = collapsed_runs(
-        output_directory / name / "records" for name in experiment_presets
+        output_directory / name / "records" for name in EXPERIMENTS
+    )
+    learning_rates: dict[str, float] = swept_learning_rates(output_directory)
+    waiting: set[str] = set()
+    ready: dict[str, list[model_factory.Preset]] = {}
+    for name, presets in experiment_presets.items():
+        ready[name] = [
+            preset
+            for preset in presets
+            if name in SWEEP_EXPERIMENTS
+            or not is_swept(preset.name)
+            or preset.name in learning_rates
+        ]
+        waiting |= {p.name for p in presets} - {p.name for p in ready[name]}
+    experiment_presets = ready
+    if waiting:
+        print(
+            f"Waiting for the learning-rate sweep: {', '.join(sorted(waiting))}"
+        )
+    targets: dict[str, set[tuple[str, str, str]]] = (
+        close_gap_targets(
+            output_directory, close_gap_tolerance, presets_filepath
+        )
+        if close_gap_tolerance is not None
+        else {}
     )
     input_names: set[str] = {
         preset.input
@@ -1147,6 +1809,8 @@ def plan_entries(
                 max_epochs=max_epochs,
                 minimum_patience=minimum_patience,
                 presets_filepath=presets_filepath,
+                learning_rates=learning_rates,
+                extra_seeds=targets.get(name),
             )
     return tokens + sorted(runs, key=lambda entry: -entry["hours"])
 
@@ -1660,6 +2324,9 @@ def _submit(args: Namespace) -> None:
         max_epochs=args.max_epochs,
         minimum_patience=args.minimum_patience,
         presets_filepath=args.presets_file.resolve(),
+        close_gap_tolerance=args.close_gap_tolerance
+        if args.close_gaps
+        else None,
     )
     pending: list[dict[str, Any]] = [
         entry for entry in entries if not Path(entry["marker"]).exists()
@@ -1685,10 +2352,15 @@ def _submit(args: Namespace) -> None:
     cpu_run_quantity: int = sum(
         entry["hours"] <= cpu_hours_limit for entry in runs
     )
+    gpu_node_quantity: int = min(
+        args.gpu_nodes, math.ceil(len(runs) / GPUS_PER_NODE)
+    )
     node_quantities: dict[str, int] = {
-        GPU: min(args.gpu_nodes, math.ceil(len(runs) / GPUS_PER_NODE)),
+        GPU: gpu_node_quantity,
         CPU: min(
-            args.cpu_nodes,
+            MAX_NODES - gpu_node_quantity
+            if args.cpu_nodes is None
+            else args.cpu_nodes,
             math.ceil(
                 (token_quantity + cpu_run_quantity) / args.cpu_workers_per_node
             ),
@@ -1763,6 +2435,15 @@ def _submit(args: Namespace) -> None:
         records.write_json(queue_directory / QUEUE_FILENAME, settings)
 
 
+def _last_line(filepath: Path) -> str:
+    """The last non-empty line of a log, such as the error a run ended with."""
+    if not filepath.exists():
+        return "(no log)"
+    with filepath.open(errors="replace") as fd:
+        lines: list[str] = [line.rstrip() for line in fd if line.strip()]
+    return lines[-1] if lines else "(empty log)"
+
+
 def _status(output_directory: Path, queue: str | None) -> None:
     """
     Summarize the progress of a queue.
@@ -1816,28 +2497,637 @@ def _status(output_directory: Path, queue: str | None) -> None:
         print(f"  {category}: {count}")
     for index, category in categories.items():
         if category in ("failed", "interrupted"):
-            print(
-                f"{category}: {entries[index]['name']}, log "
-                f"{queue_directory / 'logs' / f'{index}.log'}"
-            )
+            log_filepath: Path = queue_directory / "logs" / f"{index}.log"
+            print(f"{category}: {entries[index]['name']}, log {log_filepath}")
+            if category == "failed":
+                print(f"  {_last_line(log_filepath)}")
     records_directories: set[Path] = {
         Path(arguments[arguments.index("--records-directory") + 1])
         for arguments in (entry["arguments"] for entry in entries)
         if "--records-directory" in arguments
     }
     collapsed: set[str] = collapsed_runs(records_directories)
-    collapsed_names: list[str] = [
-        entry["name"]
-        for entry in entries
-        if str(Path(entry["marker"]).parent) in collapsed
-    ]
-    for name in collapsed_names:
-        print(f"collapsed: {name}")
-    if counts["failed"] or counts["interrupted"] or collapsed_names:
+    rerun_quantity: int = 0
+    for entry in entries:
+        run_directory: Path = Path(entry["marker"]).parent
+        if str(run_directory) not in collapsed:
+            continue
+        seed: int = int(run_directory.name.removeprefix("seed"))
+        replaced: Path = run_directory.with_name(
+            f"seed{seed - REPLACEMENT_SEED_OFFSET}"
+        )
+        replacement: Path = run_directory.with_name(
+            f"seed{seed + REPLACEMENT_SEED_OFFSET}"
+        )
+        if str(replaced) in collapsed:
+            print(f"collapsed after its rerun, kept: {entry['name']}")
+        elif (replacement / COMPLETED_FILENAME).exists():
+            print(f"collapsed, rerun as {replacement.name}: {entry['name']}")
+        else:
+            rerun_quantity += 1
+            print(f"collapsed: {entry['name']}")
+    if counts["failed"] or counts["interrupted"] or rerun_quantity:
         print(
             "Submit again to rerun failed and interrupted entries, and to "
             f"rerun collapsed runs with seed + {REPLACEMENT_SEED_OFFSET}."
         )
+
+
+def _run_identity(output_directory: Path, root: Path) -> dict[str, str] | None:
+    """
+    Name a run from its output directory, as `training_entries` lays it out.
+
+    Args
+    ----
+    output_directory: The run's output directory.
+    root: The output directory of `submit`.
+
+    Returns
+    -------
+    The run's experiment, dataset, preset, fold (empty if none) and seed, or
+    None if the directory is not a run of `submit`.
+    """
+    try:
+        parts: tuple[str, ...] = output_directory.relative_to(root).parts
+    except ValueError:
+        return None
+    if (
+        len(parts) not in (4, 5)
+        or parts[0] not in EXPERIMENTS
+        or not parts[-1].removeprefix("seed").isdigit()
+    ):
+        return None
+
+    return {
+        "experiment": parts[0],
+        "dataset": parts[1],
+        "preset": parts[2].replace("__", "/"),
+        "fold": parts[3] if len(parts) == 5 else "",
+        "seed": parts[-1].removeprefix("seed"),
+    }
+
+
+def _best_epoch(
+    epochs: list[dict[str, Any]], selection_metric: str | None
+) -> tuple[int | None, float]:
+    """
+    Find the epoch a run kept, as `qcpg` selects it.
+
+    Args
+    ----
+    epochs: The run's epochs, as `records.append_epoch` writes them.
+    selection_metric: The run's selection metric.
+
+    Returns
+    -------
+    The first epoch of the best validation score and that score, or None and
+    NaN if no epoch had a defined score.
+    """
+    best_epoch: int | None = None
+    best_score: float = -math.inf
+    for epoch in epochs:
+        score: float = (
+            epoch["validation_auc"]
+            if selection_metric == qcpg.POOLED_AUC
+            else mean_cell_auc(epoch["cell_validation_aucs"])
+        )
+        if score > best_score:
+            best_epoch, best_score = epoch["epoch"], score
+    return best_epoch, best_score if best_epoch is not None else math.nan
+
+
+def _run_hours(run: dict[str, Any]) -> float:
+    """A run's wall time from its record; NaN if it has not finished."""
+    if not run.get("started") or not run.get("finished"):
+        return math.nan
+
+    duration = datetime.fromisoformat(run["finished"]) - datetime.fromisoformat(
+        run["started"]
+    )
+    return duration.total_seconds() / SECONDS_PER_HOUR
+
+
+SUMMARY_FILENAME: str = "summary.tsv"
+SUMMARY_COLUMNS: tuple[str, ...] = (
+    "experiment",
+    "dataset",
+    "preset",
+    "fold",
+    "seed",
+    "status",
+    "epochs_trained",
+    "best_epoch",
+    "best_validation_score",
+    "test_mean_cell_auc",
+    "test_pooled_auc",
+    "test_observed_labels",
+    "collapsed",
+    "hours",
+    "record",
+)
+
+
+def summarize_runs(output_directory: Path) -> list[dict[str, Any]]:
+    """
+    Summarize the recorded runs of every experiment, one row per run.
+
+    A run's latest completed record counts, or its latest record if none
+    completed, so failed attempts that were rerun do not appear.
+
+    Args
+    ----
+    output_directory: The output directory of `submit`.
+
+    Returns
+    -------
+    The rows, with the values of `SUMMARY_COLUMNS`, ordered by experiment,
+    dataset, preset, fold and seed.
+    """
+    rows: dict[str, dict[str, Any]] = {}
+    for experiment in EXPERIMENTS:
+        records_directory: Path = output_directory / experiment / "records"
+        if not records_directory.is_dir():
+            continue
+        for run_directory in records.find_run_directories(records_directory):
+            run: dict[str, Any] = records.read_run(run_directory)
+            parameters: dict[str, Any] = run["parameters"]
+            run_output: str = str(parameters.get("output_directory", ""))
+            identity: dict[str, str] | None = _run_identity(
+                Path(run_output), output_directory
+            )
+            previous: dict[str, Any] | None = rows.get(run_output)
+            if identity is None or (
+                previous is not None
+                and previous["status"] == records.STATUS_COMPLETED
+                and run["status"] != records.STATUS_COMPLETED
+            ):
+                continue
+
+            best_epoch, best_score = _best_epoch(
+                run["epochs"], parameters.get("selection_metric")
+            )
+            test: dict[str, Any] = run["metrics"].get(records.TEST_SPLIT, {})
+            pooled: dict[str, Any] = test.get("pooled", {})
+            test_auc: float = _test_mean_cell_auc(run)
+            rows[run_output] = {
+                **identity,
+                "status": run["status"],
+                "epochs_trained": len(run["epochs"]),
+                "best_epoch": best_epoch,
+                "best_validation_score": best_score,
+                "test_mean_cell_auc": test_auc,
+                "test_pooled_auc": pooled.get("auc", math.nan),
+                "test_observed_labels": pooled.get("observed_sites"),
+                "collapsed": math.isfinite(test_auc)
+                and _is_collapsed(test_auc),
+                "hours": _run_hours(run),
+                "record": str(run_directory),
+            }
+    return sorted(
+        rows.values(),
+        key=lambda row: (
+            row["experiment"],
+            row["dataset"],
+            row["preset"],
+            row["fold"],
+            int(row["seed"]),
+        ),
+    )
+
+
+def _summary_value(value: Any) -> str:
+    """Write a summary value: floats to 6 decimals, missing values empty."""
+    if value is None or (isinstance(value, float) and math.isnan(value)):
+        return ""
+    if isinstance(value, float):
+        return f"{value:.6f}"
+    return str(value)
+
+
+def _summarize(output_directory: Path, summary_filepath: Path | None) -> None:
+    """
+    Write the summary of every recorded run as tab-separated values.
+
+    Args
+    ----
+    output_directory: The output directory of `submit`.
+    summary_filepath: The file to write, by default `SUMMARY_FILENAME` in
+        the output directory.
+    """
+    output_directory = output_directory.resolve()
+    summary_filepath = summary_filepath or output_directory / SUMMARY_FILENAME
+    rows: list[dict[str, Any]] = summarize_runs(output_directory)
+    with summary_filepath.open("w", newline="") as fd:
+        fd.write("\t".join(SUMMARY_COLUMNS) + "\n")
+        for row in rows:
+            fd.write(
+                "\t".join(
+                    _summary_value(row[column]) for column in SUMMARY_COLUMNS
+                )
+                + "\n"
+            )
+    statuses: Counter[str] = Counter(row["status"] for row in rows)
+    print(
+        f"Wrote {len(rows)} runs to {summary_filepath} ("
+        + ", ".join(
+            f"{status} {count}" for status, count in sorted(statuses.items())
+        )
+        + f"; {sum(row['collapsed'] for row in rows)} collapsed)"
+    )
+
+
+COMPARISONS_FOLDER: str = "comparisons"
+COMPARISONS_FILENAME: str = "comparisons.tsv"
+METRICS_FILENAME: str = "metrics.tsv"
+MATCHED_FILENAMES: dict[str, str] = {
+    FRONT_END_TABLE: "matched_front_end.tsv",
+    TOTAL_TABLE: "matched_total.tsv",
+}
+COMPARISON_COLUMNS: tuple[str, ...] = (
+    "family",
+    "setting",
+    "dataset",
+    "fold",
+    "model_a",
+    "model_b",
+    "seeds_a",
+    "seeds_b",
+    "size_a",
+    "size_b",
+    "scored",
+    "validation_a",
+    "validation_b",
+    "test_a",
+    "test_b",
+    "sites",
+    "difference",
+    "low",
+    "high",
+    "p_value",
+    "q_value",
+    "difference_all_sites",
+)
+METRIC_COLUMNS: tuple[str, ...] = (
+    "experiment",
+    "dataset",
+    "preset",
+    "fold",
+    "seed",
+    "test_mean_cell_auc",
+    "test_mean_cell_auprc",
+    "test_mean_cell_mcc",
+    "record",
+)
+_WEIGHTS: dict[tuple[int, int, int], Any] = {}
+
+
+def _test_sites_fingerprint(outputs: records.SplitOutputs) -> str:
+    """Identify a test set by its sites, in order."""
+    return hashlib.sha1(
+        np.ascontiguousarray(outputs.chromosome_indices, np.int64).tobytes()
+        + np.ascontiguousarray(outputs.positions, np.int64).tobytes()
+    ).hexdigest()
+
+
+def _site_sample(site_quantity: int, sample_quantity: int, seed: int) -> Any:
+    """A fixed random sample of a test set's sites, in order."""
+    if site_quantity <= sample_quantity:
+        return np.arange(site_quantity)
+    return np.sort(
+        np.random.default_rng(seed).choice(
+            site_quantity, sample_quantity, replace=False
+        )
+    )
+
+
+def run_statistics(job: dict[str, Any]) -> dict[str, Any]:
+    """
+    Compute one run's statistics; called by `compare` in worker processes.
+
+    Args
+    ----
+    job: The run's record, its test set's fingerprint and seed, the sample
+        size, the replicates and the cache file of its bootstrap values.
+
+    Returns
+    -------
+    The record, and its bootstrap values (`bootstrap.run_replicates`) on its
+    test set's sample and its mean per-cell AUPRC and MCC on every test site,
+    or an error.
+    """
+    outputs: records.SplitOutputs | None = records.read_split_outputs(
+        Path(job["record"]), records.TEST_SPLIT
+    )
+    if outputs is None:
+        return {"record": job["record"], "error": "no test outputs"}
+    if _test_sites_fingerprint(outputs) != job["fingerprint"]:
+        return {"record": job["record"], "error": "different test sites"}
+
+    precision, correlation = bootstrap.cell_metrics(
+        outputs.predictions, outputs.labels
+    )
+    cache: Path = Path(job["cache"])
+    if cache.exists():
+        values = np.load(cache)
+    else:
+        sample = _site_sample(len(outputs.labels), job["sites"], job["seed"])
+        labels = outputs.labels[sample]
+        key = (job["seed"], len(sample), job["replicates"])
+        if key not in _WEIGHTS:
+            _WEIGHTS.clear()
+            _WEIGHTS[key] = bootstrap.site_weights(
+                job["replicates"], len(sample), job["seed"]
+            )
+        values = bootstrap.run_replicates(
+            outputs.predictions[sample],
+            labels,
+            _WEIGHTS[key],
+            bootstrap.scored_cells(labels),
+        )
+        np.save(cache, values)
+    return {
+        "record": job["record"],
+        "values": values,
+        "auprc": precision,
+        "mcc": correlation,
+        "sites": min(len(outputs.labels), job["sites"]),
+    }
+
+
+def _write_tsv(
+    filepath: Path, columns: tuple[str, ...], rows: list[dict[str, Any]]
+) -> None:
+    with filepath.open("w", newline="") as fd:
+        fd.write("\t".join(columns) + "\n")
+        for row in rows:
+            fd.write(
+                "\t".join(_summary_value(row[column]) for column in columns)
+                + "\n"
+            )
+
+
+def load_pairs(filepath: Path) -> list[tuple[str, str]]:
+    """Read the complex circuit models and their real twins, as (complex,
+    real) presets."""
+    with filepath.open() as fd:
+        return [
+            (pair["complex"], pair["real"]) for pair in json.load(fd)["pairs"]
+        ]
+
+
+def _compare(
+    output_directory: Path,
+    replicate_quantity: int,
+    site_quantity: int,
+    processes: int,
+    pairs: list[tuple[str, str]],
+    presets_filepath: Path = PRESETS_FILEPATH,
+    pairs_filepath: Path = PAIRS_FILEPATH,
+) -> None:
+    """
+    Bootstrap the comparisons of every usable run's model, and write every
+    run's secondary metrics.
+
+    Runs are compared within an experiment, cell type and fold: in
+    `MATCHED_EXPERIMENTS` every quantum model with its matched comparators
+    (`matched_pairs`), elsewhere every quantum model with every classical
+    model and ceiling; and everywhere the complex and real twins of
+    `pairs_filepath`, and `pairs`. Each test set is resampled on a fixed
+    sample of at most `site_quantity` sites with the same weights for every
+    model. Single-seed models borrow the pooled seed variance of their
+    experiment and cell type, else their cell type's, else everyone's. q
+    values are Benjamini–Hochberg within each family: one matched table, one
+    experiment's comparisons with one classical model, its complex and real
+    twins, or its other pairs.
+
+    Args
+    ----
+    output_directory: The output directory of `submit`.
+    replicate_quantity: The bootstrap replicates.
+    site_quantity: The most sites of each test set's sample.
+    processes: The worker processes.
+    pairs: Further (A, B) preset pairs.
+    presets_filepath: The presets file, whose models the matched
+        comparisons measure.
+    pairs_filepath: The complex and real twins, see `load_pairs`.
+    """
+    output_directory = output_directory.resolve()
+    folder: Path = output_directory / COMPARISONS_FOLDER
+    cache_folder: Path = folder / "cache"
+    cache_folder.mkdir(parents=True, exist_ok=True)
+    rows: list[dict[str, Any]] = summarize_runs(output_directory)
+    usable: list[dict[str, Any]] = [row for row in rows if _usable(row)]
+    groups = comparison_groups(rows)
+
+    jobs: list[dict[str, Any]] = []
+    for by_preset in groups.values():
+        group_rows: list[dict[str, Any]] = [
+            row for preset_rows in by_preset.values() for row in preset_rows
+        ]
+        reference = records.read_split_outputs(
+            Path(group_rows[0]["record"]), records.TEST_SPLIT
+        )
+        if reference is None:
+            continue
+        fingerprint: str = _test_sites_fingerprint(reference)
+        for row in group_rows:
+            record_hash: str = hashlib.sha1(row["record"].encode()).hexdigest()
+            jobs.append(
+                {
+                    "record": row["record"],
+                    "fingerprint": fingerprint,
+                    "seed": zlib.crc32(fingerprint.encode()),
+                    "sites": site_quantity,
+                    "replicates": replicate_quantity,
+                    "cache": str(
+                        cache_folder
+                        / f"{record_hash}_R{replicate_quantity}_S{site_quantity}.npy"
+                    ),
+                }
+            )
+    print(f"Computing the statistics of {len(jobs)} runs", flush=True)
+    jobs.sort(key=lambda job: job["fingerprint"])
+    if processes > 1:
+        with Pool(processes) as pool:
+            results = list(pool.imap(run_statistics, jobs, chunksize=4))
+    else:
+        results = [run_statistics(job) for job in jobs]
+    by_record: dict[str, dict[str, Any]] = {}
+    for result in results:
+        if "error" in result:
+            print(f"Skipping {result['record']}: {result['error']}")
+        else:
+            by_record[result["record"]] = result
+
+    metric_rows: list[dict[str, Any]] = [
+        {
+            **{
+                column: row[column]
+                for column in METRIC_COLUMNS
+                if column in row
+            },
+            "test_mean_cell_auprc": by_record[row["record"]]["auprc"],
+            "test_mean_cell_mcc": by_record[row["record"]]["mcc"],
+        }
+        for row in usable
+        if row["record"] in by_record
+    ]
+    _write_tsv(folder / METRICS_FILENAME, METRIC_COLUMNS, metric_rows)
+
+    values: dict[tuple[str, str, str], dict[str, list[Any]]] = defaultdict(
+        lambda: defaultdict(list)
+    )
+    means: dict[tuple[str, str, str], dict[str, tuple[float, float]]] = {}
+    sample_sizes: dict[tuple[str, str, str], int] = {}
+    for key, by_preset in groups.items():
+        for preset, preset_rows in by_preset.items():
+            computed: list[dict[str, Any]] = [
+                row for row in preset_rows if row["record"] in by_record
+            ]
+            for row in computed:
+                values[key][preset].append(by_record[row["record"]]["values"])
+                sample_sizes[key] = by_record[row["record"]]["sites"]
+            if computed:
+                means.setdefault(key, {})[preset] = _means(computed)
+    variances: dict[Any, float] = {}
+    for level in ("setting", "dataset", "all"):
+        pools: dict[Any, list[Any]] = defaultdict(list)
+        for (setting, dataset, _), by_preset in values.items():
+            pool_key = {
+                "setting": (setting, dataset),
+                "dataset": dataset,
+                "all": "all",
+            }[level]
+            pools[pool_key] += [
+                np.array([run[0] for run in runs])
+                for runs in by_preset.values()
+            ]
+        for pool_key, seed_values in pools.items():
+            variance: float = bootstrap.pooled_seed_variance(seed_values)
+            if math.isfinite(variance):
+                variances[pool_key] = variance
+
+    def seed_variance(setting: str, dataset: str) -> float:
+        for pool_key in ((setting, dataset), dataset, "all"):
+            if pool_key in variances:
+                return variances[pool_key]
+        return 0.0
+
+    sizes: dict[tuple[str, str], ModelSize] = {}
+    if any(key[0] in MATCHED_EXPERIMENTS for key in values):
+        matched_rows: list[dict[str, Any]] = [
+            row
+            for row in usable
+            if row["experiment"] in MATCHED_EXPERIMENTS
+            and row["record"] in by_record
+        ]
+        print(f"Measuring the models of {len(matched_rows)} runs", flush=True)
+        sizes = measure_sizes(
+            matched_rows, model_factory.load_presets(presets_filepath)
+        )
+    twins: list[tuple[str, str]] = load_pairs(pairs_filepath)
+    comparisons: list[dict[str, Any]] = []
+    for (setting, dataset, fold), by_preset in sorted(values.items()):
+        group_key = (setting, dataset, fold)
+        group_means: dict[str, tuple[float, float]] = means[group_key]
+        candidates: list[tuple[str, str, str, MatchedPair | None]]
+        if setting in MATCHED_EXPERIMENTS:
+            candidates = [
+                (
+                    f"{setting} matched {pair.table}",
+                    pair.quantum,
+                    pair.classical,
+                    pair,
+                )
+                for pair in matched_pairs(
+                    group_means,
+                    {
+                        preset: sizes[(preset, dataset)]
+                        for preset in group_means
+                        if (preset, dataset) in sizes
+                    },
+                )
+            ]
+        else:
+            references = sorted(p for p in by_preset if is_reference(p))
+            quantum = sorted(p for p in by_preset if not is_reference(p))
+            candidates = [
+                (f"{setting} vs {r}", q, r, None)
+                for r in references
+                for q in quantum
+            ]
+        candidates += [
+            (f"{setting} {family}", a, b, None)
+            for family, family_pairs in (
+                ("complex vs real", twins),
+                ("pairs", pairs),
+            )
+            for a, b in family_pairs
+            if a in by_preset and b in by_preset
+        ]
+        variance: float = seed_variance(setting, dataset)
+        for family, a, b, matched in candidates:
+            comparison = bootstrap.compare(
+                np.stack(by_preset[a]),
+                np.stack(by_preset[b]),
+                np.random.default_rng(
+                    zlib.crc32(f"{family}|{dataset}|{fold}|{a}|{b}".encode())
+                ),
+                single_seed_variance_a=variance,
+                single_seed_variance_b=variance,
+            )
+            comparisons.append(
+                {
+                    "family": family,
+                    "setting": setting,
+                    "dataset": dataset,
+                    "fold": fold,
+                    "model_a": a,
+                    "model_b": b,
+                    "seeds_a": len(by_preset[a]),
+                    "seeds_b": len(by_preset[b]),
+                    "size_a": matched.quantum_size if matched else None,
+                    "size_b": matched.classical_size if matched else None,
+                    "scored": matched.scored if matched else None,
+                    "validation_a": group_means[a][0],
+                    "validation_b": group_means[b][0],
+                    "test_a": group_means[a][1],
+                    "test_b": group_means[b][1],
+                    "sites": sample_sizes[group_key],
+                    "difference": comparison.difference,
+                    "low": comparison.low,
+                    "high": comparison.high,
+                    "p_value": comparison.p_value,
+                    "difference_all_sites": group_means[a][1]
+                    - group_means[b][1],
+                }
+            )
+    families: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for comparison in comparisons:
+        families[comparison["family"]].append(comparison)
+    for family_comparisons in families.values():
+        q_values = bootstrap.benjamini_hochberg(
+            [comparison["p_value"] for comparison in family_comparisons]
+        )
+        for comparison, q_value in zip(
+            family_comparisons, q_values, strict=True
+        ):
+            comparison["q_value"] = float(q_value)
+    _write_tsv(folder / COMPARISONS_FILENAME, COMPARISON_COLUMNS, comparisons)
+    for table, filename in MATCHED_FILENAMES.items():
+        _write_tsv(
+            folder / filename,
+            COMPARISON_COLUMNS,
+            [
+                comparison
+                for comparison in comparisons
+                if comparison["family"].endswith(f" matched {table}")
+            ],
+        )
+    print(
+        f"Wrote {len(comparisons)} comparisons to {folder / COMPARISONS_FILENAME} "
+        f"and the metrics of {len(metric_rows)} runs to {folder / METRICS_FILENAME}"
+    )
 
 
 def main(arguments: list[str] | None = None) -> None:
@@ -1846,6 +3136,18 @@ def main(arguments: list[str] | None = None) -> None:
         _submit(args)
     elif args.command == "status":
         _status(args.output_directory, args.queue)
+    elif args.command == "summarize":
+        _summarize(args.output_directory, args.output)
+    elif args.command == "compare":
+        _compare(
+            args.output_directory,
+            args.replicates,
+            args.sites,
+            args.processes,
+            [tuple(pair) for pair in args.pair],
+            args.presets_file,
+            args.pairs_file,
+        )
     else:
         _work(args)
 

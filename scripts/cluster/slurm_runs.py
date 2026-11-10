@@ -28,6 +28,10 @@ from pathlib import Path
 from typing import Any
 
 REPOSITORY: Path = Path(__file__).resolve().parents[2]
+# The array tasks at once that fill the cluster's per-user limit of 16 nodes:
+# 16 CPU nodes of 40 CPUs for train_cpu.sbatch's 8-CPU tasks, and 4 GPU nodes
+# of 4 GPUs for train_gpu.sbatch's one-GPU tasks.
+MAX_CONCURRENT: dict[str, int] = {"cpu": 16 * 40 // 8, "gpu": 4 * 4}
 TRAIN_SCRIPT: Path = REPOSITORY / "scripts" / "train_quantum_model.py"
 PRESETS_FILEPATH: Path = REPOSITORY / "config" / "quantum_models.json"
 TEMPLATES: dict[str, Path] = {
@@ -73,8 +77,12 @@ def _parse_script_args(arguments: list[str] | None = None) -> Namespace:
     submit.add_argument(
         "--max-concurrent",
         type=int,
-        default=0,
-        help="The most array tasks to run at once; 0 for no limit.",
+        help="The most array tasks to run at once, at most the cluster's "
+        "limit and by default that: "
+        + ", ".join(
+            f"{count} {name} tasks" for name, count in MAX_CONCURRENT.items()
+        )
+        + ".",
     )
     submit.add_argument(
         "--sbatch-args",
@@ -238,10 +246,17 @@ def _submit(args: Namespace) -> None:
         for run in runs:
             fd.write(json.dumps(run) + "\n")
 
-    limit: str = f"%{args.max_concurrent}" if args.max_concurrent else ""
+    limit: int = MAX_CONCURRENT[args.resources]
+    if args.max_concurrent is not None:
+        if not 0 < args.max_concurrent <= limit:
+            raise ValueError(
+                f"--max-concurrent must be between 1 and {limit}, the "
+                f"cluster's limit of {args.resources} tasks"
+            )
+        limit = args.max_concurrent
     command: list[str] = [
         "sbatch",
-        f"--array=0-{len(runs) - 1}{limit}",
+        f"--array=0-{len(runs) - 1}%{limit}",
         f"--output={log_directory.resolve()}/%x_%A_%a.out",
         f"--export=ALL,QENETICS_REPOSITORY={REPOSITORY}",
         *shlex.split(args.sbatch_args),

@@ -92,6 +92,38 @@ def test_submit_dry_run(
         assert "--partition=main --time=1:00:00" in output[1]
         assert "train_cpu.sbatch" in output[1]
 
+        # By default, as many tasks as fill the cluster's 16-node limit.
+        script.main(
+            [
+                "submit",
+                "--presets",
+                "whole_model/G1_lin",
+                "--data-directories",
+                str(data_directory),
+                "--output-directory",
+                str(Path(temp_dir) / "runs"),
+                "--resources",
+                "gpu",
+                "--dry-run",
+            ]
+        )
+        assert "--array=0-0%16" in capsys.readouterr().out
+        with pytest.raises(ValueError, match="between 1 and 80"):
+            script.main(
+                [
+                    "submit",
+                    "--presets",
+                    "whole_model/G1_lin",
+                    "--data-directories",
+                    str(data_directory),
+                    "--output-directory",
+                    str(Path(temp_dir) / "runs"),
+                    "--max-concurrent",
+                    "81",
+                    "--dry-run",
+                ]
+            )
+
 
 def test_submit_errors(script: ModuleType) -> None:
     with pytest.raises(ValueError, match="Data directories not found"):
