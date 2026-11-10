@@ -105,26 +105,58 @@ python scripts/build_training_report.py -r /scratch/q/records
 ```
 
 Adjust the resources and environment of `train_cpu.sbatch` and
-`train_gpu.sbatch` to the cluster; `QENETICS_ENV` names the Python
-environment, by default `.venv` in the repository. `--dry-run` writes the run
+`train_gpu.sbatch` to the cluster. They load the cluster's container module
+(`enable_lmod`, `module load container_env python3/2025`) and run Python with
+`crun.python3 -p` in the environment `QENETICS_ENV`, by default
+`~/envs/pennylane-lightning`, which must have qenetics installed. `--max-concurrent` caps
+the array tasks at once, by default at the cluster's per-user limit of 16
+nodes (80 eight-CPU tasks, or 16 one-GPU tasks). `--dry-run` writes the run
 list and prints the sbatch command only.
 
-`scripts/cluster/plan_runs.py` runs the quantum experiments of the training
-plan: every preset without a full-dataset run on the full training sets
-(`full`), the wide-bank control (`E4`), chromosome cross-validation (`E12`)
-and widened 2i and serum training sets (`E13`) of Q_L320, and the global
-circuits (`Q1`). Runs keep the epoch of the best mean per-cell validation
-AUC, train for at most 25 epochs, and a run that collapses is rerun with its
-seed + 10. `submit` queues the runs that have not completed and submits
-whole-node jobs, at most `--gpu-nodes` and `--cpu-nodes` at a time
-(`pool_gpu.sbatch`, `pool_cpu.sbatch`), whose workers take runs from the
-queue; it also writes the token inputs the token presets read. Submitting
-again resumes the plan.
+`scripts/cluster/plan_runs.py` runs the experiments of the training plan with
+the presets:
+
+- `full`: every preset, quantum, classical and ceiling, on the full training
+  sets;
+- `E4`: angle-matched real wide banks; `Q1`: the real global circuits, both
+  on split A with 200k sites;
+- `E12`: chromosome cross-validation of Q_L320 and the classical references
+  (DeepCpG's CNN, C_w4_170, C_w8_90, U64); `E13`: Q_L320 on widened 2i and
+  serum training sets;
+- `LR1e-2` to `LR3e-4`: the factorization machines' learning-rate sweep on the
+  full training sets of HCC and 2i; their full runs wait for it and use its
+  best rate;
+- `splitC`: the best quantum models and DeepCpG's CNN on DeepCpG's split.
+
+Runs keep the epoch of the best mean per-cell validation AUC, train for at
+most 25 epochs, and a run that collapses is rerun with its seed + 10.
+`submit` queues the runs that have not completed and submits whole-node jobs,
+at most `--gpu-nodes` (4) and `--cpu-nodes` at a time, 16 nodes in all: the
+cluster's per-user limit allows 12 CPU nodes beside 4 GPU nodes, or 16 CPU
+nodes without them, and `--cpu-nodes` defaults to the rest (`pool_gpu.sbatch`,
+`pool_cpu.sbatch`), whose workers take runs from the queue; it also writes
+the token inputs the token presets read. Submitting again resumes the plan,
+and `--close-gaps` adds seeds 3 and 4 to every quantum model within 0.005 of
+a classical model it is compared with, and to that model.
+
+`status` shows a queue's progress and why runs failed. `summarize` writes one
+row per recorded run, with its best epoch and test AUCs, to `summary.tsv`.
+`compare` bootstraps (`qenetics.tools.bootstrap`, paired over test sites and
+seeds, with Benjamini–Hochberg q values) the matched comparisons of the full
+training sets: every quantum model against the classical model of its kind
+with the best mean validation score among those with at most 1.25 times its
+trained parameters, counted on the first layer (`matched_front_end.tsv`) and
+on the whole model (`matched_total.tsv`). It also compares the complex
+circuits with their real twins (`config/complex_real_pairs.json`) and, in the
+other experiments, every quantum model with each classical model beside it,
+and writes every run's AUPRC and Matthews correlation, into `comparisons/`.
 
 ```bash
 python scripts/cluster/plan_runs.py submit --data-directories /data/2i \
     /data/hcc /data/hepg2 /data/ser /data/mESC --output-directory /scratch/q
 python scripts/cluster/plan_runs.py status /scratch/q
+python scripts/cluster/plan_runs.py summarize /scratch/q
+python scripts/cluster/plan_runs.py compare /scratch/q --processes 40
 python scripts/build_training_report.py -r /scratch/q/full/records
 ```
 

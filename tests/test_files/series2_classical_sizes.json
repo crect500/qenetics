@@ -1,0 +1,410 @@
+{
+  "ceiling/O256": [
+    33152,
+    4032006
+  ],
+  "ceiling/O64": [
+    2144,
+    4050150
+  ],
+  "ceiling/U256": [
+    66048,
+    4064902
+  ],
+  "ceiling/U64": [
+    4224,
+    4052230
+  ],
+  "classical_pooling/C_12": [
+    780,
+    930
+  ],
+  "classical_pooling/C_16": [
+    1040,
+    1238
+  ],
+  "classical_pooling/C_20": [
+    1300,
+    1546
+  ],
+  "classical_pooling/C_4": [
+    260,
+    314
+  ],
+  "classical_pooling/C_64": [
+    4160,
+    4934
+  ],
+  "classical_pooling/C_8": [
+    520,
+    622
+  ],
+  "classical_pooling/G_288": [
+    416,
+    1190
+  ],
+  "classical_pooling/LR_1": [
+    192,
+    966
+  ],
+  "classical_pooling/LR_3": [
+    448,
+    1222
+  ],
+  "classical_pooling/LR_9": [
+    1216,
+    1990
+  ],
+  "classical_pooling/MSC_quad": [
+    852,
+    978
+  ],
+  "classical_pooling/MSC_relu": [
+    718,
+    892
+  ],
+  "classical_tail/CNN": [
+    5760,
+    4102918
+  ],
+  "classical_tail/C_2": [
+    130,
+    4000520
+  ],
+  "classical_tail/C_20": [
+    1300,
+    4015514
+  ],
+  "classical_tail/C_3": [
+    195,
+    4001353
+  ],
+  "classical_tail/C_4": [
+    260,
+    4002186
+  ],
+  "classical_tail/C_40": [
+    2600,
+    4032174
+  ],
+  "classical_tail/C_6": [
+    390,
+    4003852
+  ],
+  "classical_tail/C_w2_6": [
+    54,
+    4069052
+  ],
+  "classical_tail/C_w2_8": [
+    72,
+    4070606
+  ],
+  "classical_tail/C_w32_23": [
+    2967,
+    3953949
+  ],
+  "classical_tail/C_w32_44": [
+    5676,
+    3972786
+  ],
+  "classical_tail/C_w4_13": [
+    221,
+    4041827
+  ],
+  "classical_tail/C_w4_170": [
+    2890,
+    4165072
+  ],
+  "classical_tail/C_w4_330": [
+    5610,
+    4290672
+  ],
+  "classical_tail/C_w4_5": [
+    85,
+    4035547
+  ],
+  "classical_tail/C_w64_14": [
+    3598,
+    3816596
+  ],
+  "classical_tail/C_w64_26": [
+    6682,
+    3828896
+  ],
+  "classical_tail/C_w8_4": [
+    132,
+    4034826
+  ],
+  "classical_tail/C_w8_9": [
+    297,
+    4038831
+  ],
+  "classical_tail/C_w8_90": [
+    2970,
+    4103712
+  ],
+  "classical_tail/Cq_w32_11": [
+    2838,
+    3944604
+  ],
+  "classical_tail/Cq_w32_11_avg": [
+    2838,
+    3944604
+  ],
+  "classical_tail/FC256": [
+    131584,
+    4130438
+  ],
+  "classical_tail/FC64": [
+    8320,
+    4056326
+  ],
+  "classical_tail/FR256": [
+    66048,
+    4064902
+  ],
+  "classical_tail/FR64": [
+    4224,
+    4052230
+  ],
+  "classical_tail/G_18": [
+    160,
+    4048166
+  ],
+  "classical_tail/G_288": [
+    416,
+    4048422
+  ],
+  "classical_tail/G_72": [
+    224,
+    4048230
+  ],
+  "classical_tail/ID_0": [
+    128,
+    4048134
+  ],
+  "classical_tail/ID_w1": [
+    8,
+    4067470
+  ],
+  "classical_tail/ID_w2": [
+    16,
+    4070550
+  ],
+  "classical_tail/ID_w32": [
+    256,
+    4031878
+  ],
+  "classical_tail/ID_w4": [
+    32,
+    4043942
+  ],
+  "classical_tail/ID_w64": [
+    512,
+    3999366
+  ],
+  "classical_tail/ID_w8": [
+    64,
+    4056262
+  ],
+  "classical_tail/LR_1": [
+    192,
+    4048198
+  ],
+  "classical_tail/LR_3": [
+    448,
+    4048454
+  ],
+  "classical_tail/LR_9": [
+    1216,
+    4049222
+  ],
+  "classical_tokens/K3_CNN": [
+    90240,
+    1139974
+  ],
+  "classical_tokens/K3_Cw2_3": [
+    387,
+    1019657
+  ],
+  "classical_tokens/K3_E_3": [
+    195,
+    1019465
+  ],
+  "classical_tokens/K3_E_64": [
+    4160,
+    1070278
+  ],
+  "classical_tokens/K3_E_7": [
+    455,
+    1022797
+  ],
+  "classical_tokens/K3_GE_72": [
+    224,
+    1066342
+  ],
+  "classical_tokens/K3_ID": [
+    128,
+    1066246
+  ],
+  "classical_tokens/K3_IDw2": [
+    256,
+    1115526
+  ],
+  "classical_tokens/K4_CNN": [
+    360576,
+    1410310
+  ],
+  "classical_tokens/K4_E_2": [
+    514,
+    1019016
+  ],
+  "classical_tokens/K4_E_64": [
+    16448,
+    1082566
+  ],
+  "classical_tokens/K4_GE_96": [
+    640,
+    1214214
+  ],
+  "classical_tokens/K4_ID": [
+    512,
+    1214086
+  ],
+  "classical_tokens/P256_CNN": [
+    360576,
+    4457734
+  ],
+  "classical_tokens/P256b_CNN": [
+    366208,
+    4463366
+  ],
+  "classical_tokens/P64_CNN": [
+    90240,
+    4187398
+  ],
+  "classical_tokens/P64_E_3": [
+    195,
+    4066889
+  ],
+  "classical_tokens/P64_ID": [
+    128,
+    4113670
+  ],
+  "classical_tokens/P64b_CNN": [
+    95872,
+    4193030
+  ],
+  "classical_tokens/P64b_E_5": [
+    345,
+    4068575
+  ],
+  "classical_tokens/P64b_ID": [
+    136,
+    4116750
+  ],
+  "classical_tokens/T256_CNN": [
+    360576,
+    1410310
+  ],
+  "classical_tokens/T256_E_2": [
+    514,
+    1019016
+  ],
+  "classical_tokens/T256_E_3": [
+    771,
+    1020041
+  ],
+  "classical_tokens/T256_E_64": [
+    16448,
+    1082566
+  ],
+  "classical_tokens/T256_GE_96": [
+    640,
+    1214214
+  ],
+  "classical_tokens/T256_ID": [
+    512,
+    1214086
+  ],
+  "classical_tokens/T64_CNN": [
+    90240,
+    1139974
+  ],
+  "classical_tokens/T64_Cw2_2": [
+    258,
+    1018760
+  ],
+  "classical_tokens/T64_Cw2_3": [
+    387,
+    1019657
+  ],
+  "classical_tokens/T64_Cw4_3": [
+    771,
+    987273
+  ],
+  "classical_tokens/T64_Cw4_8": [
+    2056,
+    992398
+  ],
+  "classical_tokens/T64_Cw8_3": [
+    1539,
+    988041
+  ],
+  "classical_tokens/T64_E_3": [
+    195,
+    1019465
+  ],
+  "classical_tokens/T64_E_64": [
+    4160,
+    1070278
+  ],
+  "classical_tokens/T64_E_7": [
+    455,
+    1022797
+  ],
+  "classical_tokens/T64_GE_72": [
+    224,
+    1066342
+  ],
+  "classical_tokens/T64_ID": [
+    128,
+    1066246
+  ],
+  "classical_tokens/T64_IDw2": [
+    256,
+    1115526
+  ],
+  "classical_tokens/TF64_LR": [
+    65,
+    65
+  ],
+  "classical_whole/CNN2_gpool": [
+    21408,
+    22566
+  ],
+  "classical_whole/CNN_h12": [
+    5760,
+    479194
+  ],
+  "classical_whole/CNN_h16": [
+    5760,
+    604150
+  ],
+  "classical_whole/FL_lin": [
+    270,
+    270
+  ],
+  "classical_whole/FM_4": [
+    210,
+    210
+  ],
+  "classical_whole/OH_lin": [
+    24030,
+    24030
+  ],
+  "classical_whole/OH_mlp": [
+    513414,
+    513414
+  ]
+}
