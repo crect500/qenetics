@@ -175,6 +175,18 @@ def test_whole_classifiers() -> None:
         )
 
 
+def test_feature_classifier_shared_output() -> None:
+    model = classical_models.FeatureClassifier(
+        60, 5, hidden_layer_sizes=[2], shared_output=True
+    ).eval()
+    # 44 x 2 + 2 hidden, 2 + 1 output: the same for any number of cells.
+    assert sum(p.numel() for p in model.parameters()) == 93
+    predictions = model(_one_hot(4, 60))
+    assert predictions.shape == (4, 5)
+    assert (predictions == predictions[:, :1]).all()
+    assert not (predictions[0] == predictions[1]).all()
+
+
 def test_factorization_machine() -> None:
     model = classical_models.FactorizationMachine(
         3, 2, rank=2, initialization_scale=0.5

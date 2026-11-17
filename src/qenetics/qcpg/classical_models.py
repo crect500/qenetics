@@ -609,9 +609,20 @@ class FeatureClassifier(SequenceModel):
         output_quantity: int,
         *,
         hidden_layer_sizes: Sequence[int] = (),
+        shared_output: bool = False,
         **encoding_options: Any,
     ) -> None:
         """
+        Args
+        ----
+        sequence_length: The positions of every input.
+        output_quantity: The number of outputs (cells).
+        hidden_layer_sizes: The MLP's hidden layers; none for a linear layer.
+        shared_output: Give every output the same prediction, as the pure
+            circuits with a shared readout do, so that the parameters do not
+            grow with the outputs.
+        encoding_options: The input encoding, see `SequenceModel`.
+
         Raises
         ------
         ValueError if the inputs are not nucleotides or a size is invalid.
@@ -620,13 +631,15 @@ class FeatureClassifier(SequenceModel):
         self._require_bases()
         self.normalization = nn.BatchNorm1d(STATISTIC_QUANTITY, affine=False)
         self.head = heads.multilayer_perceptron(
-            STATISTIC_QUANTITY, hidden_layer_sizes, output_quantity
+            STATISTIC_QUANTITY,
+            hidden_layer_sizes,
+            1 if shared_output else output_quantity,
         )
 
     def _probabilities(self, channels: Tensor) -> Tensor:
         return torch.sigmoid(
             self.head(self.normalization(sequence_statistics(channels)))
-        )
+        ).expand(-1, self.output_quantity)
 
 
 class OneHotClassifier(SequenceModel):

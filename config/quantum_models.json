@@ -2483,6 +2483,54 @@
       "training_settings": "pure_whole_model",
       "input": "bases"
     },
+    "classical_whole/FM_1s": {
+      "description": "the 44 standardized sequence statistics into an MLP of 1 ReLU unit with one output shared by the cells, as the pure circuits have (gap plan E14)",
+      "model": "feature_classifier",
+      "options": {
+        "hidden_layer_sizes": [
+          1
+        ],
+        "shared_output": true
+      },
+      "training_settings": "pure_whole_model",
+      "input": "bases"
+    },
+    "classical_whole/FM_2s": {
+      "description": "the 44 standardized sequence statistics into an MLP of 2 ReLU units with one output shared by the cells, as the pure circuits have (gap plan E14)",
+      "model": "feature_classifier",
+      "options": {
+        "hidden_layer_sizes": [
+          2
+        ],
+        "shared_output": true
+      },
+      "training_settings": "pure_whole_model",
+      "input": "bases"
+    },
+    "classical_whole/FM_3s": {
+      "description": "the 44 standardized sequence statistics into an MLP of 3 ReLU units with one output shared by the cells, as the pure circuits have (gap plan E14)",
+      "model": "feature_classifier",
+      "options": {
+        "hidden_layer_sizes": [
+          3
+        ],
+        "shared_output": true
+      },
+      "training_settings": "pure_whole_model",
+      "input": "bases"
+    },
+    "classical_whole/FM_4s": {
+      "description": "the 44 standardized sequence statistics into an MLP of 4 ReLU units with one output shared by the cells, as the pure circuits have (gap plan E14)",
+      "model": "feature_classifier",
+      "options": {
+        "hidden_layer_sizes": [
+          4
+        ],
+        "shared_output": true
+      },
+      "training_settings": "pure_whole_model",
+      "input": "bases"
+    },
     "classical_whole/FM_2": {
       "description": "the 44 standardized sequence statistics into an MLP of 2 ReLU units, sized for the pure models (gap plan E14)",
       "model": "feature_classifier",
