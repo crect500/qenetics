@@ -137,3 +137,40 @@ def test_model_function_errors(script: ModuleType) -> None:
         script.model_function(model, "angle")
     with pytest.raises(ValueError, match="Only bases and k-mer"):
         script.model_function(model, script.LOGIT, input_name="cpg_bpe64")
+
+
+def test_contracted_global_circuit(script: ModuleType) -> None:
+    # A short sequence: 4 address qubits and 2 data qubits.
+    length = 13
+    torch.manual_seed(3)
+    model = model_factory.build_model(
+        "global_circuit",
+        length,
+        3,
+        options={"ansatz": "basic_ry", "quantum_layer_quantity": 2},
+    )
+    with torch.no_grad():
+        model.circuit_weights.normal_(0.0, 1.0)
+    model = model.double().eval()
+    assert script.is_contractible(model)
+    matrix = script.circuit_matrix(model)
+    assert matrix.shape == (64, 64)
+    # The circuit is unitary.
+    assert torch.allclose(
+        matrix @ matrix.conj().T, torch.eye(64, dtype=matrix.dtype), atol=1e-10
+    )
+    generator = torch.Generator().manual_seed(4)
+    bases = torch.randint(0, 4, (5, length), generator=generator)
+    sequences = torch.nn.functional.one_hot(bases, 4).double()
+    channels, _ = model.encoder(sequences)
+    with torch.no_grad():
+        simulated = script.model_logits(model, channels)
+        contracted = script.model_outputs(
+            model, channels, logits=True, matrix=matrix
+        )
+    assert torch.allclose(contracted, simulated, atol=1e-8)
+    # The contracted logits are what the diagnostics measure.
+    function = script.model_function(model, script.LOGIT)
+    values = function(sequences)
+    assert torch.allclose(values[:, 0], simulated[:, 0], atol=1e-8)
+    assert not script.is_contractible(_model("pairwise_model"))

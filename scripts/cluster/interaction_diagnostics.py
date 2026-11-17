@@ -17,8 +17,12 @@ positions (mean dimension):
 - channel_sum: that channel summed over the windows.
 
 The central CpG is never substituted. Models run in double precision where
-they can. Each loaded model is checked against the predictions its run
-recorded for the first test sites.
+they can. The global circuits with a dense head are contracted first: their
+circuit, applied to the whole sequence at once, is a fixed matrix after
+training, so each output is a matrix product instead of a circuit
+simulation. Each loaded model is checked against the predictions its run
+recorded for the first test sites, in the records' precision (float32), and
+the double-precision model against the float32 one.
 
     python scripts/cluster/interaction_diagnostics.py /scratch/qcpg \\
         --datasets hepg2 mESC --device cuda -o diagnostics.tsv
@@ -78,12 +82,20 @@ COLUMNS: tuple[str, ...] = (
     "mean_dimension",
     "mean_dimension_standard_error",
     "dimension_sequences",
+    "quantity",
     "precision",
-    "prediction_check",
+    "contracted",
+    "check_float32",
+    "check_passed",
+    "float64_minus_float32",
     "seconds",
     "record",
 )
 SequenceFunction = Callable[[Tensor], Tensor]
+# A loaded model reproduces its run if its float32 predictions for the first
+# test sites differ from the recorded ones by less than this. A loading
+# error shows as differences near 1e-2.
+CHECK_TOLERANCE: float = 1e-4
 
 
 def centre_positions(sequence_length: int) -> tuple[int, int]:
@@ -150,6 +162,82 @@ def model_logits(model: SequenceModel, channels: Tensor) -> Tensor:
     return logits
 
 
+def circuit_matrix(model: Any) -> Tensor:
+    """
+    The matrix of a global circuit model's trained circuit on its register.
+
+    Returns
+    -------
+    M, (2^n, 2^n) with row k the state the circuit makes of basis state k:
+    the state of normalized amplitudes a is a @ M.
+    """
+    import pennylane as qp
+
+    from qenetics.circuits.ansatz import LayeredAnsatz
+
+    dimension: int = 2**model.wire_quantity
+    device = qp.device("default.qubit", wires=model.wire_quantity)
+    weights: Tensor = model.circuit_weights.detach().to(torch.float64).cpu()
+
+    @qp.qnode(device, interface="torch")
+    def state(amplitudes: Tensor) -> Any:
+        qp.AmplitudeEmbedding(amplitudes, wires=range(model.wire_quantity))
+        LayeredAnsatz(weights, wires=model.circuit_wires, ansatz=model.ansatz)
+        return qp.state()
+
+    identity = torch.eye(dimension, dtype=torch.complex128)
+    return torch.cat(
+        [
+            state(identity[start : start + 256])
+            for start in range(0, dimension, 256)
+        ]
+    )
+
+
+def is_contractible(model: SequenceModel) -> bool:
+    """Whether a model is a global circuit with a dense head, without shots."""
+    from qenetics.qcpg.hybrid_models import GlobalCircuitModel
+
+    return (
+        isinstance(model, GlobalCircuitModel)
+        and model.head is not None
+        and not model.shots
+    )
+
+
+def model_outputs(
+    model: SequenceModel,
+    channels: Tensor,
+    *,
+    logits: bool,
+    matrix: Tensor | None = None,
+) -> Tensor:
+    """
+    A model's (batch, cells) predictions or logits.
+
+    Args
+    ----
+    model: The model, in evaluation mode.
+    channels: Its encoded inputs.
+    logits: Return logits (`model_logits`) rather than probabilities.
+    matrix: For a contracted global circuit, its `circuit_matrix`.
+    """
+    if matrix is None:
+        return (
+            model_logits(model, channels)
+            if logits
+            else model._probabilities(channels)
+        )
+    features: list[Tensor] = []
+    for shift in model.shifts:
+        amplitudes = model._amplitudes(channels, shift).to(matrix.dtype)
+        amplitudes = amplitudes / amplitudes.abs().pow(2).sum(1).sqrt()[:, None]
+        probabilities = (amplitudes @ matrix).abs().pow(2)
+        features.append(probabilities.to(channels.dtype) * model.feature_scale)
+    values: Tensor = model.head(torch.cat(features, 1))
+    return values if logits else torch.sigmoid(values)
+
+
 def model_function(
     model: SequenceModel,
     output: str,
@@ -191,6 +279,9 @@ def model_function(
             )
         kmer_length = int(input_name.removeprefix(tokenization.CPG_KMER))
     parameter: Tensor = next(model.parameters())
+    matrix: Tensor | None = None
+    if is_contractible(model) and output in (LOGIT, PROBABILITY):
+        matrix = circuit_matrix(model).to(parameter.device)
 
     def function(sequences: Tensor) -> Tensor:
         if kmer_length:
@@ -211,10 +302,8 @@ def model_function(
                 else first_layer.sum(-1, keepdim=True)
             )
             return values.double().cpu()
-        values = (
-            model_logits(model, channels)
-            if output == LOGIT
-            else model._probabilities(channels)
+        values = model_outputs(
+            model, channels, logits=output == LOGIT, matrix=matrix
         ).double()
         return torch.stack([values[:, 0], values.mean(1)], 1).cpu()
 
@@ -381,39 +470,33 @@ def load_model(
     return model.to(device).eval()
 
 
-def prediction_check(
+def predictions(
     model: SequenceModel,
     preset: model_factory.Preset,
-    record: Path,
     sequences: Tensor,
-) -> float:
-    """
-    The largest difference between a loaded model's predictions for the
-    first test sites and those its run recorded.
-
-    Args
-    ----
-    model: The loaded model.
-    preset: Its preset.
-    record: Its run record.
-    sequences: The first sites of the run's first test chromosome, in file
-        order, as (n, length, 4) one-hot bases.
-
-    Returns
-    -------
-    The largest absolute difference, or NaN without recorded outputs.
-    """
-    outputs = records.read_split_outputs(record, records.TEST_SPLIT)
-    if outputs is None:
-        return math.nan
+    *,
+    contracted: bool,
+) -> Tensor:
+    """A model's (n, cells) predictions for one-hot sequences, in float64."""
     parameter: Tensor = next(model.parameters())
+    matrix = circuit_matrix(model).to(parameter.device) if contracted else None
     with torch.no_grad():
         channels, _ = model.encoder(_model_inputs(sequences, preset, parameter))
-        predictions = model._probabilities(channels).double().cpu()
-    recorded = torch.from_numpy(
-        np.asarray(outputs.predictions[: len(sequences)], np.float64)
+        return (
+            model_outputs(model, channels, logits=False, matrix=matrix)
+            .double()
+            .cpu()
+        )
+
+
+def recorded_predictions(record: Path, quantity: int) -> Tensor | None:
+    """The first predictions a run recorded for its test sites."""
+    outputs = records.read_split_outputs(record, records.TEST_SPLIT)
+    if outputs is None:
+        return None
+    return torch.from_numpy(
+        np.asarray(outputs.predictions[:quantity], np.float64)
     )
-    return float((predictions - recorded).abs().max())
 
 
 def _model_inputs(
@@ -559,19 +642,36 @@ def main(arguments: list[str] | None = None) -> None:
                 continue
             preset = presets[name]
             started = time.perf_counter()
+            sample = test_sequences[:256]
+            recorded = recorded_predictions(record, len(sample))
             model = load_model(preset, record, device)
+            contracted = is_contractible(model)
+            single = predictions(model, preset, sample, contracted=False)
+            check = (
+                float((single - recorded).abs().max())
+                if recorded is not None
+                else math.nan
+            )
             precision = "float64"
             try:
                 model.double()
-                check = prediction_check(
-                    model, preset, record, test_sequences[:256]
+                double = predictions(
+                    model, preset, sample, contracted=contracted
                 )
             except (RuntimeError, TypeError) as error:
                 print(f"{name} does not run in double precision: {error}")
                 model = load_model(preset, record, device)
                 precision = "float32"
-                check = prediction_check(
-                    model, preset, record, test_sequences[:256]
+                double = predictions(
+                    model, preset, sample, contracted=contracted
+                )
+            difference = float((double - single).abs().max())
+            if not check < CHECK_TOLERANCE:
+                print(
+                    f"{name} on {dataset} does not reproduce its recorded "
+                    f"predictions (largest difference {check:.2g}); its rows "
+                    "should not be used",
+                    flush=True,
                 )
             span: tuple[int, int] | None = None
             window = 0
@@ -600,7 +700,7 @@ def main(arguments: list[str] | None = None) -> None:
                 generator,
                 triple_quantity=args.triples,
                 dimension_sequence_quantity=args.slow_dimension_sequences
-                if model_factory.uses_device(preset.model)
+                if model_factory.uses_device(preset.model) and not contracted
                 else args.dimension_sequences,
                 span=span,
                 batch_size=args.batch_size,
@@ -612,8 +712,17 @@ def main(arguments: list[str] | None = None) -> None:
                         **row,
                         "dataset": dataset,
                         "preset": name,
+                        "quantity": "logit"
+                        if output == LOGIT
+                        else "probability"
+                        if output == PROBABILITY
+                        else "first-layer channel",
                         "precision": precision,
-                        "prediction_check": check,
+                        "contracted": contracted
+                        and output in (LOGIT, PROBABILITY),
+                        "check_float32": check,
+                        "check_passed": check < CHECK_TOLERANCE,
+                        "float64_minus_float32": difference,
                         "seconds": seconds,
                         "record": str(record),
                     }
@@ -628,7 +737,8 @@ def main(arguments: list[str] | None = None) -> None:
                     for row in measured
                 )
                 + f"; mean dimension {measured[0]['mean_dimension']:.3f}"
-                f"; check {check:.2g}; {seconds:.0f} s",
+                f"; float32 check {check:.2g}, float64 - float32 "
+                f"{difference:.2g}; {seconds:.0f} s",
                 flush=True,
             )
             plan_runs._write_tsv(args.output, COLUMNS, results)
