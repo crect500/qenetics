@@ -2566,6 +2566,15 @@
       "training_settings": "factorization_machine",
       "input": "bases"
     },
+    "classical_whole/PW_cell": {
+      "description": "PW_full with one pairwise table per cell: each cell's logit is any function of interaction order 2, the order-2 ceiling (gap plan E15)",
+      "model": "pairwise_model",
+      "options": {
+        "per_output_tables": true
+      },
+      "training_settings": "factorization_machine",
+      "input": "bases"
+    },
     "classical_whole/OH_lin": {
       "description": "Series II's OH_lin: the flattened one-hot sequence into logistic regression",
       "model": "one_hot_classifier",

@@ -746,12 +746,20 @@ class PairwiseModel(SequenceModel):
     covered by the linear terms, so s spans every function of interaction
     order 2 in the positions. The pairwise score is shared by the cells, as a
     factorization machine's factors are, and each cell scales it with h_c.
+
+    With `per_output_tables`, each cell has its own table U_c instead:
+
+        logit_c = b_c + w_c . x + s_c(x),
+
+    so each cell's logit is any function of order 2.
     """
 
     def __init__(
         self,
         sequence_length: int,
         output_quantity: int,
+        *,
+        per_output_tables: bool = False,
         **encoding_options: Any,
     ) -> None:
         """
@@ -759,6 +767,8 @@ class PairwiseModel(SequenceModel):
         ----
         sequence_length: The positions of every input.
         output_quantity: The number of outputs (cells).
+        per_output_tables: Give each output its own pairwise table, rather
+            than one shared table scaled per output.
         encoding_options: The input encoding, see `SequenceModel`.
 
         Raises
@@ -788,24 +798,31 @@ class PairwiseModel(SequenceModel):
             + columns[different_positions],
             persistent=False,
         )
+        self.table_quantity: int = output_quantity if per_output_tables else 1
         self.pair_weights = nn.Parameter(
-            torch.zeros(int(different_positions.sum()))
+            torch.zeros(self.table_quantity, int(different_positions.sum()))
         )
-        self.score_weights = nn.Linear(1, output_quantity, bias=False)
+        self.score_weights: nn.Module = (
+            nn.Identity()
+            if per_output_tables
+            else nn.Linear(1, output_quantity, bias=False)
+        )
 
     def pairwise_score(self, channels: Tensor) -> Tensor:
-        """(batch, channels, length) -> the (batch, 1) score s(x)."""
+        """(batch, channels, length) -> the (batch, tables) scores s(x)."""
         features: Tensor = channels[:, 1:].transpose(1, 2).flatten(1)
-        table: Tensor = (
-            torch.zeros(
-                self.feature_quantity**2,
-                dtype=self.pair_weights.dtype,
-                device=self.pair_weights.device,
-            )
-            .index_put((self.pair_indices,), self.pair_weights)
-            .view(self.feature_quantity, self.feature_quantity)
+        table: Tensor = torch.zeros(
+            self.table_quantity,
+            self.feature_quantity**2,
+            dtype=self.pair_weights.dtype,
+            device=self.pair_weights.device,
         )
-        return ((features @ table) * features).sum(1, keepdim=True)
+        table = table.index_copy(1, self.pair_indices, self.pair_weights).view(
+            self.table_quantity, self.feature_quantity, self.feature_quantity
+        )
+        return torch.einsum(
+            "bf,tfg,bg->bt", features, table, features.to(table.dtype)
+        )
 
     def _probabilities(self, channels: Tensor) -> Tensor:
         return torch.sigmoid(

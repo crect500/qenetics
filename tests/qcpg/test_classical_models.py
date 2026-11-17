@@ -200,14 +200,14 @@ def test_factorization_machine() -> None:
 def test_pairwise_model() -> None:
     model = classical_models.PairwiseModel(3, 2)
     # 3 codes at each of 3 positions: 9 weights for each of 3 position pairs.
-    assert model.pair_weights.shape == (27,)
+    assert model.pair_weights.shape == (1, 27)
     with torch.no_grad():
         model.pair_weights.normal_()
     sequence = _one_hot(4, 3)
     channels = sequence.transpose(1, 2)
     codes = channels[:, 1:].transpose(1, 2)
     table = torch.zeros(81)
-    table[model.pair_indices] = model.pair_weights.detach()
+    table[model.pair_indices] = model.pair_weights.detach()[0]
     table = table.view(3, 3, 3, 3)
     score = torch.stack(
         [
@@ -228,6 +228,21 @@ def test_pairwise_model() -> None:
     assert "pair_indices" not in model.state_dict()
     with pytest.raises(ValueError, match="at least 2 positions"):
         classical_models.PairwiseModel(1, 2)
+
+    # One table per cell: cell c's logit uses its own table only.
+    per_cell = classical_models.PairwiseModel(3, 2, per_output_tables=True)
+    assert per_cell.pair_weights.shape == (2, 27)
+    with torch.no_grad():
+        per_cell.pair_weights.normal_()
+    shared = classical_models.PairwiseModel(3, 2)
+    shared.linear.load_state_dict(per_cell.linear.state_dict())
+    for cell in range(2):
+        with torch.no_grad():
+            shared.pair_weights.copy_(per_cell.pair_weights[cell : cell + 1])
+            shared.score_weights.weight.fill_(1.0)
+        assert torch.allclose(
+            per_cell(sequence)[:, cell], shared(sequence)[:, cell], atol=1e-6
+        )
 
 
 def test_classical_network_errors() -> None:
