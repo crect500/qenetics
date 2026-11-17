@@ -89,26 +89,6 @@ training setting. A model family can be configured from scratch with
 
 Each run is recorded in the records directory and added to its HTML report.
 
-## Cluster (SLURM)
-
-`scripts/cluster/slurm_runs.py submit` runs presets, datasets and seeds as a
-job array, one run per task with its own output directory, on CPU nodes or
-one GPU per task:
-
-```bash
-python scripts/cluster/slurm_runs.py submit --presets 'deepcpg_tail/*' \
-    --data-directories /data/hcc --seeds 0 1 2 --output-directory /scratch/q \
-    --resources gpu --max-concurrent 8 --sbatch-args='--partition=gpu' \
-    -- --training-chromosomes 1 3 5 7 9 --validation-chromosomes 13 \
-    --test-chromosomes 2 4
-python scripts/build_training_report.py -r /scratch/q/records
-```
-
-Adjust the resources and environment of `train_cpu.sbatch` and
-`train_gpu.sbatch` to the cluster; `QENETICS_ENV` names the Python
-environment, by default `.venv` in the repository. `--dry-run` writes the run
-list and prints the sbatch command only.
-
 ## Tests
 
 ```bash
