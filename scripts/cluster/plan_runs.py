@@ -180,11 +180,12 @@ CAP_MARGIN: int = 3
 # on mean validation score. The matched comparisons keep the 25-epoch runs.
 LONG_EXPERIMENT: str = "E15long"
 # The order-2 ceiling, PW_full with one table per cell, on one dataset with
-# the fewest cells, at PW_full's chosen rate and epoch limit.
+# the fewest cells (mESC, where the quantum and classical whole models are
+# closest), at PW_full's chosen rate and epoch limit.
 PAIRWISE_CEILING: str = "classical_whole/PW_cell"
 PAIRWISE_SHARED: str = "classical_whole/PW_full"
 PAIRWISE_CEILING_EXPERIMENT: str = "E15cell"
-PAIRWISE_CEILING_DATASET: str = "hepg2"
+PAIRWISE_CEILING_DATASET: str = "mesc"
 # Every model on the full training sets whose best epoch in some run was
 # within `CAP_MARGIN` of `EPOCH_LIMIT`, run again with `CAP_EPOCHS` epochs.
 # The swept presets have their own rule (`CAP_EXPERIMENT`, `LONG_EXPERIMENT`).

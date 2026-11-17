@@ -1149,8 +1149,10 @@ def test_pairwise_ceiling_experiment(
     presets: dict[str, model_factory.Preset],
     data_root: Path,
     capsys: pytest.CaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     output = data_root / "out"
+    assert script.PAIRWISE_CEILING_DATASET == "mesc"
     chosen, _ = script.experiment_presets(
         presets, ["E15cell"], ["classical_whole/PW_cell"], []
     )
@@ -1162,6 +1164,7 @@ def test_pairwise_ceiling_experiment(
     datasets = [
         script.load_dataset(data_root / name) for name in ("2i", "hepg2")
     ]
+    monkeypatch.setattr(script, "PAIRWISE_CEILING_DATASET", "hepg2")
     costs = {"classical_whole/PW_cell": 1.0}
     # It waits for PW_full's rate.
     assert (

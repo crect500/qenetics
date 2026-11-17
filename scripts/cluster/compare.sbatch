@@ -36,6 +36,11 @@ for ceiling in ceiling/U64 ceiling/O64 ceiling/U256 ceiling/O256 \
     pairs+=(--pair "$ceiling" classical_tail/CNN)
 done
 pairs+=(--pair deepcpg_tail/Q_L320 ceiling/U64 --pair deepcpg_tail/Q_L320 ceiling/O64)
+# The free matrices against the constrained ones, complex against real at
+# the ceiling, and the validation-chosen bank against its ceiling.
+pairs+=(--pair classical_tail/FC64 ceiling/U64 --pair classical_tail/FR64 ceiling/O64)
+pairs+=(--pair ceiling/U64 ceiling/O64 --pair ceiling/U256 ceiling/O256)
+pairs+=(--pair deepcpg_tail/Q_L128 ceiling/U64)
 
 compare() {
     crun.python3 -p "$environment" python "$repository/scripts/cluster/plan_runs.py" \
