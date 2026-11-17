@@ -522,6 +522,18 @@ def _resolve_chromosomes(
 
     if not training:
         raise ValueError("No training chromosomes specified.")
+    shared: list[str] = sorted(
+        ({*training} & {*validation})
+        | ({*training} & {*test})
+        | ({*validation} & {*test}),
+        key=_chromosome_sort_key,
+    )
+    if shared:
+        logger.warning(
+            "Chromosomes %s are in more than one of the training, validation "
+            "and test splits, so their sites are not held out",
+            ", ".join(shared),
+        )
     if not validation:
         raise ValueError(
             f"No validation chromosomes: none specified, and no chromosome "
@@ -820,11 +832,19 @@ def _prepare_training(
         training_sampler = None
         validation_sampler = None
 
+    # BatchNorm cannot train on a batch of one sample, which the feature
+    # models would otherwise meet when one site is left over.
+    sampled_quantity: int = (
+        len(training_sampler)
+        if training_sampler is not None
+        else len(training_dataset)
+    )
     training_loader = DataLoader(
         dataset=training_dataset,
         batch_size=training_parameters.batch_size,
         shuffle=training_sampler is None,
         sampler=training_sampler,
+        drop_last=sampled_quantity % training_parameters.batch_size == 1,
         pin_memory=pin_memory,
         num_workers=training_parameters.loader_worker_quantity,
         generator=(
@@ -860,7 +880,8 @@ def _train_one_epoch(
 ) -> float:
     accumulated_loss: float = 0.0
     accumulated_batches: int = 0
-    return_loss: float = 0.0
+    epoch_loss: float = 0.0
+    epoch_batches: int = 0
     model.train(True)
     if training_parameters.gpu_quantity > 1:
         training_loader.sampler.set_epoch(epoch)
@@ -897,21 +918,23 @@ def _train_one_epoch(
         optimizer.step()
         accumulated_loss += loss.item()
         accumulated_batches += 1
+        epoch_loss += loss.item()
+        epoch_batches += 1
         if (
             batch_index % training_parameters.report_every == 0
             and batch_index != 0
         ):
-            return_loss = accumulated_loss / accumulated_batches
             logger.info(
                 "Epoch %d - Batch %d loss: %.4f",
                 epoch,
                 batch_index,
-                return_loss,
+                accumulated_loss / accumulated_batches,
             )
             accumulated_loss = 0.0
             accumulated_batches = 0
 
-    return return_loss
+    # The mean loss of the epoch's batches with observed labels.
+    return epoch_loss / epoch_batches if epoch_batches else float("nan")
 
 
 @dataclass
@@ -1445,7 +1468,11 @@ def _single_distributed_gpu_train_qcpg_circuit(
 ) -> None:
     _ddp_setup(rank, world_size, master_port)
     logging.basicConfig(
-        filename=training_parameters.log_directory / "qcpg_train.log",
+        filename=(
+            training_parameters.log_directory
+            or training_parameters.output_directory
+        )
+        / "qcpg_train.log",
         level=training_parameters.log_level,
         format=f"[Rank {rank}] " + "%(asctime)s - %(levelname)s - %(message)s",
     )
@@ -1474,9 +1501,8 @@ def _multi_gpu_train_qcpq_circuit(
 ) -> None:
     if torch.cuda.device_count() < training_parameters.gpu_quantity:
         raise RuntimeError(
-            "%d GPUs requested. Only found %d",
-            training_parameters.gpu_quantity,
-            torch.cuda.device_count(),
+            f"{training_parameters.gpu_quantity} GPUs requested, but only "
+            f"{torch.cuda.device_count()} found"
         )
 
     world_size: int = training_parameters.gpu_quantity

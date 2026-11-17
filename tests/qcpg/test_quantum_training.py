@@ -255,3 +255,66 @@ def test_build_model_nucleotide_tokens(dataset_directory: Path) -> None:
     )
     model = qcpg.build_model(training_parameters, WINDOW_LENGTH, 2, {})
     assert model.channel_quantity == 4
+
+
+def test_feature_model_with_one_site_left_over(
+    dataset_directory: Path,
+) -> None:
+    # 40 training sites in batches of 13 leave one site, on which BatchNorm
+    # cannot train; that batch is dropped.
+    parameters = _parameters(
+        dataset_directory,
+        model="feature_classifier",
+        model_options={},
+        batch_size=13,
+        epochs=1,
+    )
+    qcpg.train_qnn_circuit(parameters)
+    run = records.read_run(_only_run(dataset_directory))
+    assert run["status"] == records.STATUS_COMPLETED
+
+
+def test_epoch_loss_is_mean_of_batches() -> None:
+    torch.manual_seed(0)
+    model = torch.nn.Sequential(torch.nn.Flatten(), torch.nn.Linear(8, 2))
+    inputs = torch.rand(10, 2, 4)
+    labels = (torch.rand(10, 2) < 0.5).float()
+    loader = torch.utils.data.DataLoader(
+        torch.utils.data.TensorDataset(inputs, labels), batch_size=4
+    )
+
+    def probabilities(batch: torch.Tensor) -> torch.Tensor:
+        return torch.sigmoid(model(batch))
+
+    wrapped = torch.nn.Module()
+    wrapped.forward = probabilities  # type: ignore[method-assign]
+    wrapped.add_module("model", model)
+    with torch.no_grad():
+        expected = np.mean(
+            [
+                torch.nn.functional.binary_cross_entropy(
+                    probabilities(batch), batch_labels
+                ).item()
+                for batch, batch_labels in loader
+            ]
+        )
+    # A learning rate of 0 keeps the weights, so every batch's loss is known.
+    loss = qcpg._train_one_epoch(
+        wrapped,
+        0,
+        loader,
+        torch.optim.SGD(model.parameters(), lr=0.0),
+        qcpg.TrainingParameters(Path("."), Path(".")),
+    )
+    assert loss == pytest.approx(expected, rel=1e-6)
+
+
+def test_shared_chromosomes_warn(
+    dataset_directory: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    qcpg._resolve_chromosomes(_parameters(dataset_directory))
+    assert "more than one of the training" not in caplog.text
+    qcpg._resolve_chromosomes(
+        _parameters(dataset_directory, training_chromosomes=["1", "2", "3"])
+    )
+    assert "Chromosomes 2, 3 are in more than one" in caplog.text
