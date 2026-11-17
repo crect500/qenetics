@@ -49,7 +49,11 @@ on the whole model (the total table). It also compares the complex circuits
 with their real twins (config/complex_real_pairs.json) and, in the other
 experiments, every quantum model with each classical model beside it, and
 writes every run's per-cell AUPRC and Matthews correlation, into the
-comparisons folder.
+comparisons folder. Its options write variants beside it (--name): genomic
+blocks resampled together (--block-size), token comparators from every input
+of a setting (--token-pool setting), single-seed variances from the same
+models' full-set seeds (--single-seed-variance same-models) and the ceilings
+matched like quantum models (--match-ceilings).
 
     python scripts/cluster/plan_runs.py submit \\
         --data-directories /data/2i /data/hcc /data/hepg2 /data/ser \\
@@ -674,6 +678,41 @@ def _parse_script_args(arguments: list[str] | None = None) -> Namespace:
         default=PAIRS_FILEPATH,
         help="The complex circuit models and their real twins to compare.",
     )
+    compare.add_argument(
+        "--block-size",
+        type=int,
+        default=0,
+        help="Resample the test sites in genomic blocks of this many bp, one "
+        "weight per block, instead of site by site (0).",
+    )
+    compare.add_argument(
+        "--token-pool",
+        choices=[INPUT_POOL, SETTING_POOL],
+        default=INPUT_POOL,
+        help="The classical candidates of a model on token inputs: those on "
+        "its own input, or on any input of its setting (3- and 4-mers, both "
+        "BPE vocabularies, base-aligned tokens with and without bases).",
+    )
+    compare.add_argument(
+        "--single-seed-variance",
+        choices=[POOLED_VARIANCE, SAME_MODELS_VARIANCE],
+        default=POOLED_VARIANCE,
+        help="The seed variance of single-seed models: pooled over every "
+        "model of the experiment and cell type, or over the seeds of the "
+        "same experiment's models on the full training sets.",
+    )
+    compare.add_argument(
+        "--match-ceilings",
+        action="store_true",
+        help="Also match the ceilings with classical models as if they were "
+        "quantum models, in families of their own in the comparisons file.",
+    )
+    compare.add_argument(
+        "--name",
+        default=COMPARISONS_FOLDER,
+        help="The folder of the output directory to write to, for variants "
+        "side by side. The bootstrap cache is shared.",
+    )
     work = commands.add_parser(
         "work",
         help="Run entries of a queue until none is left; started by the node "
@@ -1284,6 +1323,27 @@ MATCHED_SIZE_RATIO: float = 1.25
 SIMILAR_SIZE_RATIO: float = 0.8
 FRONT_END_TABLE: str = "front-end"
 TOTAL_TABLE: str = "total"
+# Comparator pools of token inputs: candidates on the quantum model's own
+# input, or on any input of its setting (k-mers, BPE tokens, base-aligned
+# tokens).
+INPUT_POOL: str = "input"
+SETTING_POOL: str = "setting"
+TOKEN_SETTINGS: tuple[str, ...] = ("cpg_kmer", "cpg_bpe", "painted")
+# Seed variances of single-seed models: pooled over every model of the
+# experiment and cell type (then wider), or over the compared models' seeds in
+# the matched experiments.
+POOLED_VARIANCE: str = "pooled"
+SAME_MODELS_VARIANCE: str = "same-models"
+
+
+def input_setting(input_name: str) -> str:
+    """The setting of an input: its token family, or the input itself."""
+    for setting in TOKEN_SETTINGS:
+        if input_name.startswith(setting):
+            return setting
+    return input_name
+
+
 # The experiments whose models are compared in matched pairs; the others
 # compare every quantum model with each classical model beside it.
 MATCHED_EXPERIMENTS: frozenset[str] = frozenset({"full"})
@@ -1397,7 +1457,10 @@ class MatchedPair:
 
 
 def matched_pairs(
-    means: dict[str, tuple[float, float]], sizes: dict[str, ModelSize]
+    means: dict[str, tuple[float, float]],
+    sizes: dict[str, ModelSize],
+    token_pool: str = INPUT_POOL,
+    ceilings: bool = False,
 ) -> list[MatchedPair]:
     """
     Match the quantum models of one experiment, cell type and fold with
@@ -1416,16 +1479,32 @@ def matched_pairs(
     ----
     means: The mean validation score and test AUC of each preset.
     sizes: The size of each preset's model.
+    token_pool: `INPUT_POOL` for candidates on the quantum model's input,
+        `SETTING_POOL` for those on any input of its setting
+        (`input_setting`).
+    ceilings: Match the ceilings instead of the quantum models, as if they
+        were quantum models.
 
     Returns
     -------
     The pairs, by table and quantum model.
     """
+
+    def same_pool(first: str, second: str) -> bool:
+        if token_pool == SETTING_POOL:
+            return input_setting(first) == input_setting(second)
+        return first == second
+
     pairs: list[MatchedPair] = []
     for table in (FRONT_END_TABLE, TOTAL_TABLE):
         for quantum in sorted(means):
             size: ModelSize | None = sizes.get(quantum)
-            if is_reference(quantum) or size is None:
+            subject: bool = (
+                quantum.startswith(CEILING_SECTION)
+                if ceilings
+                else not is_reference(quantum)
+            )
+            if not subject or size is None:
                 continue
             if table == TOTAL_TABLE and size.kind == WHOLE_KIND:
                 continue
@@ -1440,7 +1519,7 @@ def matched_pairs(
                 for name in means
                 if name.startswith(CLASSICAL_PREFIX)
                 and name in sizes
-                and sizes[name].input == size.input
+                and same_pool(sizes[name].input, size.input)
                 and (size.kind == WHOLE_KIND or sizes[name].kind == size.kind)
                 and count(name, by_total=by_total)
                 <= MATCHED_SIZE_RATIO * quantity
@@ -2778,7 +2857,7 @@ METRIC_COLUMNS: tuple[str, ...] = (
     "test_mean_cell_mcc",
     "record",
 )
-_WEIGHTS: dict[tuple[int, int, int], Any] = {}
+_WEIGHTS: dict[tuple[int, int, int, int], Any] = {}
 
 
 def _test_sites_fingerprint(outputs: records.SplitOutputs) -> str:
@@ -2807,7 +2886,8 @@ def run_statistics(job: dict[str, Any]) -> dict[str, Any]:
     Args
     ----
     job: The run's record, its test set's fingerprint and seed, the sample
-        size, the replicates and the cache file of its bootstrap values.
+        size, the replicates, the block size (0 for single sites) and the
+        cache file of its bootstrap values.
 
     Returns
     -------
@@ -2832,11 +2912,21 @@ def run_statistics(job: dict[str, Any]) -> dict[str, Any]:
     else:
         sample = _site_sample(len(outputs.labels), job["sites"], job["seed"])
         labels = outputs.labels[sample]
-        key = (job["seed"], len(sample), job["replicates"])
+        key = (job["seed"], len(sample), job["replicates"], job["block"])
         if key not in _WEIGHTS:
             _WEIGHTS.clear()
-            _WEIGHTS[key] = bootstrap.site_weights(
-                job["replicates"], len(sample), job["seed"]
+            _WEIGHTS[key] = (
+                bootstrap.block_weights(
+                    job["replicates"],
+                    outputs.chromosome_indices[sample],
+                    outputs.positions[sample],
+                    job["block"],
+                    job["seed"],
+                )
+                if job["block"]
+                else bootstrap.site_weights(
+                    job["replicates"], len(sample), job["seed"]
+                )
             )
         values = bootstrap.run_replicates(
             outputs.predictions[sample],
@@ -2883,6 +2973,11 @@ def _compare(
     pairs: list[tuple[str, str]],
     presets_filepath: Path = PRESETS_FILEPATH,
     pairs_filepath: Path = PAIRS_FILEPATH,
+    block_size: int = 0,
+    token_pool: str = INPUT_POOL,
+    single_seed_variance: str = POOLED_VARIANCE,
+    match_ceilings: bool = False,
+    name: str = COMPARISONS_FOLDER,
 ) -> None:
     """
     Bootstrap the comparisons of every usable run's model, and write every
@@ -2910,11 +3005,23 @@ def _compare(
     presets_filepath: The presets file, whose models the matched
         comparisons measure.
     pairs_filepath: The complex and real twins, see `load_pairs`.
+    block_size: The bp of the genomic blocks resampled together
+        (`bootstrap.block_weights`), or 0 to resample single sites.
+    token_pool: The comparator pool of token inputs, see `matched_pairs`.
+    single_seed_variance: `POOLED_VARIANCE`, or `SAME_MODELS_VARIANCE` to
+        give the single-seed models of an experiment, cell type and fold the
+        pooled seed variance of those same models in `MATCHED_EXPERIMENTS`
+        on that cell type, where they have several seeds.
+    match_ceilings: Also match the ceilings as if they were quantum models,
+        in the families "<experiment> ceilings <table>".
+    name: The folder of the output directory to write to.
     """
     output_directory = output_directory.resolve()
-    folder: Path = output_directory / COMPARISONS_FOLDER
-    cache_folder: Path = folder / "cache"
+    folder: Path = output_directory / name
+    folder.mkdir(parents=True, exist_ok=True)
+    cache_folder: Path = output_directory / COMPARISONS_FOLDER / "cache"
     cache_folder.mkdir(parents=True, exist_ok=True)
+    block_suffix: str = f"_B{block_size}" if block_size else ""
     rows: list[dict[str, Any]] = summarize_runs(output_directory)
     usable: list[dict[str, Any]] = [row for row in rows if _usable(row)]
     groups = comparison_groups(rows)
@@ -2939,9 +3046,10 @@ def _compare(
                     "seed": zlib.crc32(fingerprint.encode()),
                     "sites": site_quantity,
                     "replicates": replicate_quantity,
+                    "block": block_size,
                     "cache": str(
                         cache_folder
-                        / f"{record_hash}_R{replicate_quantity}_S{site_quantity}.npy"
+                        / f"{record_hash}_R{replicate_quantity}_S{site_quantity}{block_suffix}.npy"
                     ),
                 }
             )
@@ -3007,7 +3115,22 @@ def _compare(
             if math.isfinite(variance):
                 variances[pool_key] = variance
 
-    def seed_variance(setting: str, dataset: str) -> float:
+    def seed_variance(
+        setting: str, dataset: str, presets: Iterable[str]
+    ) -> float:
+        if single_seed_variance == SAME_MODELS_VARIANCE:
+            names = set(presets)
+            same: float = bootstrap.pooled_seed_variance(
+                [
+                    np.array([run[0] for run in runs])
+                    for (other, other_dataset, _), by_preset in values.items()
+                    if other in MATCHED_EXPERIMENTS and other_dataset == dataset
+                    for preset, runs in by_preset.items()
+                    if preset in names
+                ]
+            )
+            if math.isfinite(same):
+                return same
         for pool_key in ((setting, dataset), dataset, "all"):
             if pool_key in variances:
                 return variances[pool_key]
@@ -3032,6 +3155,11 @@ def _compare(
         group_means: dict[str, tuple[float, float]] = means[group_key]
         candidates: list[tuple[str, str, str, MatchedPair | None]]
         if setting in MATCHED_EXPERIMENTS:
+            group_sizes: dict[str, ModelSize] = {
+                preset: sizes[(preset, dataset)]
+                for preset in group_means
+                if (preset, dataset) in sizes
+            }
             candidates = [
                 (
                     f"{setting} matched {pair.table}",
@@ -3039,15 +3167,20 @@ def _compare(
                     pair.classical,
                     pair,
                 )
-                for pair in matched_pairs(
-                    group_means,
-                    {
-                        preset: sizes[(preset, dataset)]
-                        for preset in group_means
-                        if (preset, dataset) in sizes
-                    },
-                )
+                for pair in matched_pairs(group_means, group_sizes, token_pool)
             ]
+            if match_ceilings:
+                candidates += [
+                    (
+                        f"{setting} ceilings {pair.table}",
+                        pair.quantum,
+                        pair.classical,
+                        pair,
+                    )
+                    for pair in matched_pairs(
+                        group_means, group_sizes, token_pool, ceilings=True
+                    )
+                ]
         else:
             references = sorted(p for p in by_preset if is_reference(p))
             quantum = sorted(p for p in by_preset if not is_reference(p))
@@ -3065,7 +3198,7 @@ def _compare(
             for a, b in family_pairs
             if a in by_preset and b in by_preset
         ]
-        variance: float = seed_variance(setting, dataset)
+        variance: float = seed_variance(setting, dataset, by_preset)
         for family, a, b, matched in candidates:
             comparison = bootstrap.compare(
                 np.stack(by_preset[a]),
@@ -3147,6 +3280,11 @@ def main(arguments: list[str] | None = None) -> None:
             [tuple(pair) for pair in args.pair],
             args.presets_file,
             args.pairs_file,
+            args.block_size,
+            args.token_pool,
+            args.single_seed_variance,
+            args.match_ceilings,
+            args.name,
         )
     else:
         _work(args)

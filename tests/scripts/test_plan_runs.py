@@ -1081,6 +1081,50 @@ def test_matched_pairs(script: ModuleType) -> None:
     )
     assert pairs[("total", "deepcpg_tail/Q_L4")].classical_size == 4102918
 
+    # The ceilings matched as if they were quantum models, and only they.
+    ceilings = script.matched_pairs(means, sizes, ceilings=True)
+    assert [(p.table, p.quantum, p.classical) for p in ceilings] == [
+        ("front-end", "ceiling/U64", "classical_tail/C_2"),
+        ("total", "ceiling/U64", "classical_tail/CNN"),
+    ]
+
+
+def test_matched_pairs_token_pool(script: ModuleType) -> None:
+    sizes = {
+        "tokens/K4_QE_L4": script.ModelSize(608, 1214182, "tail", "cpg_kmer4"),
+        "classical_tokens/K4_GE_96": script.ModelSize(
+            640, 1214214, "tail", "cpg_kmer4"
+        ),
+        "classical_tokens/K3_Cw2_3": script.ModelSize(
+            387, 1067000, "tail", "cpg_kmer3"
+        ),
+        "classical_tokens/T64_Cw2_3": script.ModelSize(
+            387, 1067000, "tail", "cpg_bpe64"
+        ),
+    }
+    means = {
+        "tokens/K4_QE_L4": (0.70, 0.74),
+        "classical_tokens/K4_GE_96": (0.68, 0.72),
+        "classical_tokens/K3_Cw2_3": (0.72, 0.75),
+        "classical_tokens/T64_Cw2_3": (0.90, 0.90),
+    }
+
+    def front_end(pool: str) -> str:
+        return next(
+            pair.classical
+            for pair in script.matched_pairs(means, sizes, pool)
+            if pair.table == "front-end"
+        )
+
+    # Its own input's candidates only; then also the 3-mer models, but not
+    # the BPE ones.
+    assert front_end(script.INPUT_POOL) == "classical_tokens/K4_GE_96"
+    assert front_end(script.SETTING_POOL) == "classical_tokens/K3_Cw2_3"
+    assert [
+        script.input_setting(name)
+        for name in ("cpg_kmer3", "cpg_bpe256", "painted_bases64", "bases")
+    ] == ["cpg_kmer", "cpg_bpe", "painted", "bases"]
+
 
 def test_close_gaps(
     script: ModuleType,
@@ -1395,6 +1439,37 @@ def test_compare(
             ["compare", str(output), "--replicates", "200", "--sites", "300"]
         )
         assert (folder / "comparisons.tsv").read_text().splitlines() == lines
+
+        # A variant in its own folder: blocks of 500 bp (50 sites each), and
+        # the seed variance of splitC's single-seed models from the full
+        # sets, where only the CNN has two seeds.
+        capsys.readouterr()
+        script.main(
+            [
+                "compare",
+                str(output),
+                "--replicates",
+                "200",
+                "--sites",
+                "300",
+                "--block-size",
+                "500",
+                "--single-seed-variance",
+                "same-models",
+                "--match-ceilings",
+                "--name",
+                "comparisons_block",
+            ]
+        )
+        assert "Wrote 8 comparisons" in capsys.readouterr().out
+        assert (folder / "comparisons.tsv").read_text().splitlines() == lines
+        assert len(list((folder / "cache").glob("*_B500.npy"))) == 10
+        blocks = _read_tsv(output / "comparisons_block" / "comparisons.tsv")
+        by_key = {(r["family"], r["model_a"]): r for r in rows}
+        for row in blocks:
+            site = by_key[(row["family"], row["model_a"])]
+            assert row["difference"] == site["difference"]
+            assert (row["low"], row["high"]) != (site["low"], site["high"])
 
 
 def test_complex_real_pairs(

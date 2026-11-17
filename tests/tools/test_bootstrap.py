@@ -20,6 +20,21 @@ def data() -> tuple[np.ndarray, np.ndarray]:
     return scores, labels
 
 
+def test_block_weights() -> None:
+    chromosomes = np.array([0, 0, 0, 0, 1, 1])
+    positions = np.array([5, 99, 100, 250, 5, 60])
+    weights = bootstrap.block_weights(500, chromosomes, positions, 100, seed=1)
+    assert weights.shape == (500, 6)
+    # Sites of one bin of one chromosome share a weight; others do not.
+    assert (weights[:, 0] == weights[:, 1]).all()
+    assert (weights[:, 4] == weights[:, 5]).all()
+    for first, second in ((1, 2), (2, 3), (0, 4)):
+        assert (weights[:, first] != weights[:, second]).any()
+    assert weights.mean() == pytest.approx(1.0, abs=0.1)
+    again = bootstrap.block_weights(500, chromosomes, positions, 100, seed=1)
+    assert (weights == again).all()
+
+
 def test_weighted_aucs(data: tuple[np.ndarray, np.ndarray]) -> None:
     scores, labels = data
     observed = ~np.isnan(labels[:, 0])

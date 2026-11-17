@@ -55,6 +55,49 @@ def site_weights(
     )
 
 
+def block_weights(
+    replicate_quantity: int,
+    chromosome_indices: NDArray[np.integer],
+    positions: NDArray[np.integer],
+    block_size: int,
+    seed: int,
+) -> NDArray[np.uint8]:
+    """
+    Poisson(1) weights of genomic blocks, given to every site of a block.
+
+    Sites of the same chromosome whose positions fall in the same bin of
+    `block_size` bp share a weight, so that neighbouring sites are resampled
+    together.
+
+    Args
+    ----
+    replicate_quantity: The replicates R.
+    chromosome_indices: Each site's chromosome index.
+    positions: Each site's position.
+    block_size: The block length in bp.
+    seed: The seed; every model scored on the same test set uses the same.
+
+    Returns
+    -------
+    The (R, sites) weights.
+    """
+    bins = np.stack(
+        [
+            np.asarray(chromosome_indices, np.int64),
+            np.asarray(positions, np.int64) // block_size,
+        ],
+        axis=1,
+    )
+    _, block_of_site = np.unique(bins, axis=0, return_inverse=True)
+    block_of_site = block_of_site.reshape(-1)
+    blocks = (
+        np.random.default_rng(seed)
+        .poisson(1.0, size=(replicate_quantity, int(block_of_site.max()) + 1))
+        .astype(np.uint8)
+    )
+    return blocks[:, block_of_site]
+
+
 def weighted_aucs(
     scores: NDArray[np.floating],
     labels: NDArray[np.floating],
