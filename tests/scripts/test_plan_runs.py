@@ -931,6 +931,20 @@ def test_status_collapsed_runs(
         assert not any(line.startswith("Submit again") for line in lines)
 
 
+def _record_sweep(
+    output: Path, sweep: str, preset: str, score: float, epochs: int = 1
+) -> None:
+    for name in ("hcc", "2i"):
+        _record_run(
+            output / sweep / "records",
+            output / sweep / name / preset.replace("/", "__") / "seed0",
+            datetime(2026, 11, 1, tzinfo=UTC),
+            status="completed",
+            cell_validation_aucs=[[0.5, 0.5]] * (epochs - 1) + [[score, score]],
+            test_aucs=[0.7],
+        )
+
+
 def test_learning_rate_sweep(
     script: ModuleType,
     presets: dict[str, model_factory.Preset],
@@ -940,71 +954,162 @@ def test_learning_rate_sweep(
     output = data_root / "out"
     dataset = script.load_dataset(data_root / "2i")
     sweeps = list(script.SWEEP_EXPERIMENTS)
-    assert sweeps == ["LR1e-2", "LR3e-3", "LR1e-3", "LR3e-4"]
-    chosen, _ = script.experiment_presets(
-        presets, [*sweeps, "full"], ["classical_whole/FacM_r2"], []
-    )
-    costs = {"classical_whole/FacM_r2": 1.0}
+    assert sweeps == [
+        "LR1e-2",
+        "LR3e-3",
+        "LR1e-3",
+        "LR3e-4",
+        "LR1e-4",
+        "LR3e-5",
+        "LR1e-5",
+        "LR3e-6",
+    ]
+    name = "classical_whole/FacM_r2"
+    experiments = [*sweeps, "LRcap50", "E15", "full"]
+    chosen, _ = script.experiment_presets(presets, experiments, [name], [])
+    costs = {name: 1.0}
     options = {
         "max_epochs": 25,
         "minimum_patience": 3,
         "presets_filepath": Path("presets.json"),
     }
+
+    def planned() -> list[str]:
+        entries = script.plan_entries(
+            chosen, [dataset], None, output, costs, **options
+        )
+        return sorted(entry["name"] for entry in entries)
+
     entries = script.plan_entries(
         chosen, [dataset], None, output, costs, **options
     )
-    # One run per rate on 2i's full training set (the sweep's other dataset,
-    # HCC, is not given); the full runs wait for the sweep.
+    # One run per starting rate on 2i's full training set (the sweep's other
+    # dataset, HCC, is not given); the edge rates, the longer runs and the
+    # full runs wait for the sweep.
     assert sorted(entry["name"] for entry in entries) == sorted(
-        f"{sweep}/2i/classical_whole/FacM_r2/seed0" for sweep in sweeps
+        f"{sweep}/2i/{name}/seed0" for sweep in sweeps[:6]
     )
     assert sorted(
         entry["arguments"][entry["arguments"].index("--learning-rate") + 1]
         for entry in entries
-    ) == ["0.0003", "0.001", "0.003", "0.01"]
+    ) == ["0.0001", "0.0003", "0.001", "0.003", "0.01", "3e-05"]
     assert all("--all-training-samples" in e["arguments"] for e in entries)
-    assert "Waiting for the learning-rate sweep: classical_whole/FacM_r2" in (
+    assert f"Waiting for the learning-rate sweep: {name}" in (
         capsys.readouterr().out
     )
 
-    # Every rate on both sweep datasets: 3e-3 has the best mean validation.
-    start = datetime(2026, 11, 1, tzinfo=UTC)
-    scores = {"LR1e-2": 0.70, "LR3e-3": 0.74, "LR1e-3": 0.73, "LR3e-4": 0.71}
-    for hour, (sweep, score) in enumerate(scores.items()):
-        for name in ("hcc", "2i"):
-            _record_run(
-                output / sweep / "records",
-                output / sweep / name / "classical_whole__FacM_r2" / "seed0",
-                start + timedelta(hours=hour),
-                status="completed",
-                cell_validation_aucs=[[score, score]],
-                test_aucs=[0.7],
-            )
-            if sweep == "LR3e-4":
-                break
+    # Every starting rate on both sweep datasets: the lowest, 3e-5, has the
+    # best mean validation, so the next lower rate must be tried.
+    scores = dict(zip(sweeps, (0.60, 0.64, 0.66, 0.70, 0.71, 0.72)))
+    for sweep, score in list(scores.items())[:5]:
+        _record_sweep(output, sweep, name, score)
     assert script.swept_learning_rates(output) == {}
-    _record_run(
-        output / "LR3e-4" / "records",
-        output / "LR3e-4" / "2i" / "classical_whole__FacM_r2" / "seed0",
-        start,
-        status="completed",
-        cell_validation_aucs=[[0.71, 0.71]],
-        test_aucs=[0.7],
+    _record_sweep(output, "LR3e-5", name, 0.72)
+    state = script.sweep_state(output, 25)
+    assert (state.rates, state.needed) == ({}, {"LR1e-5": {name}})
+    assert f"LR1e-5/2i/{name}/seed0" in planned()
+
+    # 1e-5 is worse, so 3e-5 is interior and chosen. Its best epoch was the
+    # first, far from the limit, and it differs from the first sweep's rate:
+    # the full runs use it and the refit experiment runs.
+    _record_sweep(output, "LR1e-5", name, 0.69)
+    state = script.sweep_state(output, 25)
+    assert (state.rates, state.needed, state.capped) == (
+        {name: 3e-5},
+        {},
+        set(),
     )
-    assert script.swept_learning_rates(output) == {
-        "classical_whole/FacM_r2": 0.003
-    }
+    names = planned()
+    assert [n for n in names if n.startswith("full/")] == [
+        f"full/2i/{name}/seed{seed}" for seed in (0, 1, 2)
+    ]
+    assert [n for n in names if n.startswith("E15/")] == [
+        f"E15/2i/{name}/seed{seed}" for seed in (0, 1, 2)
+    ]
+    assert not any(n.startswith(("LRcap50/", "LR3e-6/")) for n in names)
     entries = script.plan_entries(
         {"full": chosen["full"]}, [dataset], None, output, costs, **options
     )
-    assert [entry["name"] for entry in entries] == [
-        f"full/2i/classical_whole/FacM_r2/seed{seed}" for seed in (0, 1, 2)
-    ]
     arguments = entries[0]["arguments"]
-    assert arguments[arguments.index("--learning-rate") + 1] == "0.003"
+    assert arguments[arguments.index("--learning-rate") + 1] == "3e-05"
 
 
-# Sizes of the matched comparisons' tests: front end, total, kind, input.
+def test_sweep_epoch_rule(
+    script: ModuleType,
+    presets: dict[str, model_factory.Preset],
+    data_root: Path,
+) -> None:
+    output = data_root / "out"
+    dataset = script.load_dataset(data_root / "2i")
+    name = "classical_whole/FacM_r32"
+    # 3e-4 is best and interior; its best epoch is the 23rd of 25.
+    for sweep, score, epochs in (
+        ("LR1e-3", 0.70, 2),
+        ("LR3e-4", 0.75, 23),
+        ("LR1e-4", 0.72, 2),
+        ("LR3e-5", 0.71, 2),
+    ):
+        _record_sweep(output, sweep, name, score, epochs)
+    state = script.sweep_state(output, 25)
+    assert (state.rates, state.capped) == ({name: 3e-4}, {name})
+    assert script.sweep_state(output, 30).capped == set()
+    chosen, _ = script.experiment_presets(
+        presets, ["LRcap50", "E15"], [name], []
+    )
+    entries = script.plan_entries(
+        chosen,
+        [dataset],
+        None,
+        output,
+        {name: 1.0},
+        max_epochs=25,
+        minimum_patience=3,
+        presets_filepath=Path("presets.json"),
+    )
+    # The longer run on the sweep's dataset; no refit of a new preset.
+    assert [entry["name"] for entry in entries] == [f"LRcap50/2i/{name}/seed0"]
+    arguments = entries[0]["arguments"]
+    assert arguments[arguments.index("--epochs") + 1] == "50"
+    assert arguments[arguments.index("--learning-rate") + 1] == "0.0003"
+
+
+def test_undecided_targets(script: ModuleType, tmp_path: Path) -> None:
+    table = tmp_path / "matched_total.tsv"
+    columns = script.COMPARISON_COLUMNS
+    rows = [
+        # Decided: significant and clear of zero.
+        ("hcc", "Q_a", "C_a", "True", -0.02, -0.01, 0.01),
+        # Undecided: the interval spans zero, or q is too large.
+        ("hcc", "Q_b", "C_a", "True", -0.01, 0.01, 0.01),
+        ("2i", "Q_c", "C_b", "True", 0.001, 0.01, 0.2),
+        # Not scored.
+        ("2i", "Q_d", "C_b", "False", -0.01, 0.01, 0.9),
+    ]
+    lines = ["\t".join(columns)]
+    for dataset, a, b, scored, low, high, q in rows:
+        row = dict.fromkeys(columns, "")
+        row.update(
+            setting="full",
+            dataset=dataset,
+            model_a=a,
+            model_b=b,
+            scored=scored,
+            low=str(low),
+            high=str(high),
+            q_value=str(q),
+        )
+        lines.append("\t".join(row[column] for column in columns))
+    table.write_text("\n".join(lines) + "\n")
+    assert script.undecided_targets([table]) == {
+        "full": {
+            ("hcc", "", "Q_b"),
+            ("hcc", "", "C_a"),
+            ("2i", "", "Q_c"),
+            ("2i", "", "C_b"),
+        }
+    }
+
+
 SIZES: dict[str, tuple[int, int, str, str]] = {
     "classical_tail/CNN": (5760, 4102918, "tail", "bases"),
     "classical_tail/C_2": (100, 4000000, "tail", "bases"),

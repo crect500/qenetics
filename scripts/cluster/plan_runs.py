@@ -86,7 +86,7 @@ from datetime import datetime
 from fnmatch import fnmatchcase
 from multiprocessing import Pool
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 
@@ -134,12 +134,47 @@ FACTORIZATION_MACHINES: tuple[str, ...] = (
     "classical_whole/FacM_r4",
     "classical_whole/FacM_r8",
 )
-# The plan tunes every new model family with these learning rates on the full
+# The order-2 ladder of the gap plan (E15): factorization machines of higher
+# rank and the complete pairwise model.
+ORDER_2_MODELS: tuple[str, ...] = (
+    "classical_whole/FacM_r32",
+    "classical_whole/FacM_r128",
+    "classical_whole/FacM_r1024",
+    "classical_whole/PW_full",
+)
+# The plan tunes every new model family with learning rates on the full
 # training sets of these datasets, then trains it with the rate of the best
-# mean validation score.
-SWEEP_LEARNING_RATES: tuple[float, ...] = (1e-2, 3e-3, 1e-3, 3e-4)
+# mean validation score. The rates, from high to low; each preset starts with
+# those of `SWEEP_PRESETS`, and tries the next lower one while its best rate
+# is the lowest it tried (`EDGE_LEARNING_RATES` are tried only so).
+SWEEP_LEARNING_RATES: tuple[float, ...] = (
+    1e-2,
+    3e-3,
+    1e-3,
+    3e-4,
+    1e-4,
+    3e-5,
+    1e-5,
+    3e-6,
+)
+EDGE_LEARNING_RATES: frozenset[float] = frozenset({1e-5, 3e-6})
 SWEEP_DATASETS: frozenset[str] = frozenset({"hcc", "2i"})
-SWEPT_PRESETS: tuple[str, ...] = FACTORIZATION_MACHINES
+SWEPT_PRESETS: tuple[str, ...] = FACTORIZATION_MACHINES + ORDER_2_MODELS
+SWEEP_PRESETS: dict[float, tuple[str, ...]] = {
+    rate: FACTORIZATION_MACHINES if rate > 1e-3 else SWEPT_PRESETS
+    for rate in SWEEP_LEARNING_RATES
+}
+# The rate the factorization machines' full runs used before the sweep was
+# widened; `REFIT_EXPERIMENT` trains them again if the wider sweep chooses
+# another.
+FIRST_SWEEP_RATE: float = 3e-4
+REFIT_EXPERIMENT: str = "E15"
+# A swept preset whose best epoch at its chosen rate is within
+# `CAP_MARGIN` epochs of the limit is run again on the sweep's datasets with
+# `CAP_EPOCHS` epochs, in `CAP_EXPERIMENT`.
+CAP_EXPERIMENT: str = "LRcap50"
+CAP_EPOCHS: int = 50
+CAP_MARGIN: int = 3
 # --close-gaps adds these seeds to comparisons within this AUC.
 CLOSE_GAP_SEEDS: tuple[int, ...] = (3, 4)
 CLOSE_GAP_TOLERANCE: float = 0.005
@@ -334,6 +369,7 @@ class Experiment:
         the same model on the same input as an earlier preset.
     learning_rate: The learning rate of every run, instead of the preset's,
         for a learning-rate sweep.
+    max_epochs: Its epoch limit, instead of `submit`'s.
     """
 
     description: str
@@ -343,6 +379,7 @@ class Experiment:
     all_sites: bool
     deduplicated: bool = False
     learning_rate: float | None = None
+    max_epochs: int | None = None
 
 
 def _sweep_name(learning_rate: float) -> str:
@@ -391,8 +428,8 @@ EXPERIMENTS: dict[str, Experiment] = {
     ),
     **{
         _sweep_name(rate): Experiment(
-            f"the factorization machines' learning-rate sweep at {rate:g}",
-            SWEPT_PRESETS,
+            f"the order-2 models' learning-rate sweep at {rate:g}",
+            SWEEP_PRESETS[rate],
             (0,),
             sweep_training_sets,
             all_sites=True,
@@ -400,6 +437,23 @@ EXPERIMENTS: dict[str, Experiment] = {
         )
         for rate in SWEEP_LEARNING_RATES
     },
+    CAP_EXPERIMENT: Experiment(
+        "swept models whose best epoch was near the limit, at their chosen "
+        f"rate with {CAP_EPOCHS} epochs",
+        SWEPT_PRESETS,
+        (0,),
+        sweep_training_sets,
+        all_sites=True,
+        max_epochs=CAP_EPOCHS,
+    ),
+    REFIT_EXPERIMENT: Experiment(
+        "the first factorization machines on the full training sets, at a "
+        "rate the wider sweep chose over the first sweep's",
+        FACTORIZATION_MACHINES,
+        (0, 1, 2),
+        full_training_sets,
+        all_sites=True,
+    ),
     "splitC": Experiment(
         "the best quantum models and DeepCpG's CNN on DeepCpG's split",
         (
@@ -417,6 +471,8 @@ EXPERIMENTS: dict[str, Experiment] = {
 SWEEP_EXPERIMENTS: tuple[str, ...] = tuple(
     _sweep_name(rate) for rate in SWEEP_LEARNING_RATES
 )
+# The experiments that tune models; their runs are not compared.
+TUNING_EXPERIMENTS: tuple[str, ...] = (*SWEEP_EXPERIMENTS, CAP_EXPERIMENT)
 
 
 @dataclass
@@ -599,6 +655,17 @@ def _parse_script_args(arguments: list[str] | None = None) -> Namespace:
         "--sbatch-args",
         default="",
         help="Further sbatch options of every node job, e.g. '--account=x'.",
+    )
+    submit.add_argument(
+        "--close-undecided",
+        type=Path,
+        nargs="+",
+        default=[],
+        metavar="TABLE",
+        help="Add seeds "
+        f"{', '.join(map(str, CLOSE_GAP_SEEDS))} to both models of every "
+        "scored comparison without a significant difference in these tables "
+        "of compare, such as comparisons/matched_total.tsv.",
     )
     submit.add_argument("--presets-file", type=Path, default=PRESETS_FILEPATH)
     submit.add_argument(
@@ -1245,45 +1312,104 @@ def is_swept(name: str) -> bool:
     return any(fnmatchcase(name, pattern) for pattern in SWEPT_PRESETS)
 
 
-def swept_learning_rates(output_directory: Path) -> dict[str, float]:
+@dataclass
+class SweepState:
     """
-    Choose the learning rate of each swept preset.
+    Where the learning-rate sweep stands.
+
+    Attributes
+    ----------
+    rates: The chosen rate of each preset whose sweep is complete.
+    needed: For each edge-rate experiment, the presets that must try it:
+        their best rate so far is the lowest they tried.
+    capped: The presets with a chosen rate whose best epoch on a sweep
+        dataset was within `CAP_MARGIN` of the epoch limit.
+    """
+
+    rates: dict[str, float] = field(default_factory=dict)
+    needed: dict[str, set[str]] = field(default_factory=dict)
+    capped: set[str] = field(default_factory=set)
+
+
+def sweep_state(output_directory: Path, max_epochs: int) -> SweepState:
+    """
+    Read the learning-rate sweep's runs and apply its rules.
+
+    A preset's rate is chosen once it has a completed run at each of its
+    starting rates (`SWEEP_PRESETS`, without `EDGE_LEARNING_RATES`) on every
+    sweep dataset: the rate with the best mean validation score over the
+    datasets. While that is the lowest rate it tried and a lower one exists,
+    it must try the next lower one first.
 
     Args
     ----
     output_directory: The output directory of `submit`.
+    max_epochs: The epoch limit of the sweep's runs.
 
     Returns
     -------
-    For each preset with a completed sweep run at every rate on every sweep
-    dataset, the rate with the best mean validation score over the datasets.
+    The state.
     """
-    scores: dict[str, dict[str, dict[str, float]]] = defaultdict(
+    scores: dict[str, dict[float, dict[str, float]]] = defaultdict(
         lambda: defaultdict(dict)
+    )
+    best_epochs: dict[str, dict[float, int]] = defaultdict(
+        lambda: defaultdict(int)
     )
     for row in summarize_runs(output_directory):
         if (
             row["experiment"] in SWEEP_EXPERIMENTS
             and row["status"] == records.STATUS_COMPLETED
         ):
+            rate: float = cast(
+                float, EXPERIMENTS[row["experiment"]].learning_rate
+            )
             score: float = row["best_validation_score"]
-            scores[row["preset"]][row["experiment"]][row["dataset"].lower()] = (
+            scores[row["preset"]][rate][row["dataset"].lower()] = (
                 score if math.isfinite(score) else -math.inf
             )
-    rates: dict[str, float] = {}
-    for preset, by_sweep in scores.items():
-        means: dict[str, float] = {
-            name: statistics.fmean(by_dataset[d] for d in SWEEP_DATASETS)
-            for name, by_dataset in by_sweep.items()
+            if row["best_epoch"] is not None:
+                best_epochs[row["preset"]][rate] = max(
+                    best_epochs[row["preset"]][rate], row["best_epoch"]
+                )
+    state = SweepState()
+    for preset, by_rate in scores.items():
+        means: dict[float, float] = {
+            rate: statistics.fmean(by_dataset[d] for d in SWEEP_DATASETS)
+            for rate, by_dataset in by_rate.items()
             if SWEEP_DATASETS <= set(by_dataset)
         }
-        if len(means) == len(SWEEP_EXPERIMENTS):
-            rate: float | None = EXPERIMENTS[
-                max(means, key=means.get)
-            ].learning_rate
-            if rate is not None:
-                rates[preset] = rate
-    return rates
+        tried: list[float] = [
+            rate
+            for rate in SWEEP_LEARNING_RATES
+            if rate not in EDGE_LEARNING_RATES and preset in SWEEP_PRESETS[rate]
+        ]
+        if not tried or not all(rate in means for rate in tried):
+            continue
+        while True:
+            best: float = max(tried, key=lambda rate: means[rate])
+            lower: list[float] = [
+                rate for rate in SWEEP_LEARNING_RATES if rate < min(tried)
+            ]
+            if best != min(tried) or not lower:
+                state.rates[preset] = best
+                if best_epochs[preset][best] + 1 >= max_epochs - CAP_MARGIN:
+                    state.capped.add(preset)
+                break
+            if max(lower) not in means:
+                state.needed.setdefault(_sweep_name(max(lower)), set()).add(
+                    preset
+                )
+                break
+            tried.append(max(lower))
+    return state
+
+
+def swept_learning_rates(
+    output_directory: Path, max_epochs: int = CAP_EPOCHS
+) -> dict[str, float]:
+    """The chosen learning rate of each swept preset, see `sweep_state`."""
+    return sweep_state(output_directory, max_epochs).rates
 
 
 def is_reference(name: str) -> bool:
@@ -1558,7 +1684,7 @@ def _usable(row: dict[str, Any]) -> bool:
         row["status"] == records.STATUS_COMPLETED
         and not row["collapsed"]
         and math.isfinite(row["test_mean_cell_auc"])
-        and row["experiment"] not in SWEEP_EXPERIMENTS
+        and row["experiment"] not in TUNING_EXPERIMENTS
     )
 
 
@@ -1658,6 +1784,43 @@ def close_gap_targets(
     return targets
 
 
+def undecided_targets(
+    filepaths: Iterable[Path], alpha: float = 0.05
+) -> dict[str, set[tuple[str, str, str]]]:
+    """
+    Find the scored comparisons of `compare`'s tables without a significant
+    difference.
+
+    Args
+    ----
+    filepaths: Tables that `compare` wrote, such as matched_total.tsv.
+    alpha: A comparison is decided if its q value is below this and its
+        interval excludes zero.
+
+    Returns
+    -------
+    Both models of each undecided comparison, by experiment, as (dataset,
+    fold, preset).
+    """
+    targets: dict[str, set[tuple[str, str, str]]] = defaultdict(set)
+    for filepath in filepaths:
+        with filepath.open() as fd:
+            header: list[str] = fd.readline().rstrip("\n").split("\t")
+            for line in fd:
+                row = dict(zip(header, line.rstrip("\n").split("\t")))
+                if row["scored"] != "True":
+                    continue
+                decided: bool = float(row["q_value"]) < alpha and (
+                    float(row["low"]) > 0 or float(row["high"]) < 0
+                )
+                if not decided:
+                    targets[row["setting"]] |= {
+                        (row["dataset"], row["fold"], row["model_a"]),
+                        (row["dataset"], row["fold"], row["model_b"]),
+                    }
+    return targets
+
+
 def training_entries(
     experiment_name: str,
     dataset: Dataset,
@@ -1749,7 +1912,7 @@ def training_entries(
                 str(presets_filepath),
                 *(["--all-training-samples"] if experiment.all_sites else []),
                 "--epochs",
-                str(max_epochs),
+                str(experiment.max_epochs or max_epochs),
                 "--patience",
                 str(run_patience(preset, minimum_patience)),
                 "--selection-metric",
@@ -1795,7 +1958,7 @@ def training_entries(
                             costs[preset.name]
                             * 1e-6
                             * sites
-                            * (max_epochs + 1)
+                            * ((experiment.max_epochs or max_epochs) + 1)
                             / SECONDS_PER_HOUR,
                         )
                     )
@@ -1813,13 +1976,17 @@ def plan_entries(
     minimum_patience: int,
     presets_filepath: Path,
     close_gap_tolerance: float | None = None,
+    undecided_tables: Iterable[Path] = (),
 ) -> list[dict[str, Any]]:
     """
     Plan every entry of a queue: the token inputs, then the training runs,
     longest first.
 
     Swept presets outside the sweep wait until it completes, and then use
-    its best rate (`swept_learning_rates`).
+    its best rate (`sweep_state`). The sweep's edge rates run only for the
+    presets that need them, `CAP_EXPERIMENT` only for those whose best epoch
+    was near the limit, and `REFIT_EXPERIMENT` only for those whose rate
+    changed from `FIRST_SWEEP_RATE`.
 
     Args
     ----
@@ -1831,6 +1998,8 @@ def plan_entries(
         `training_entries`.
     close_gap_tolerance: Add `CLOSE_GAP_SEEDS` to the targets of
         `close_gap_targets` with this tolerance, or None for none.
+    undecided_tables: Add `CLOSE_GAP_SEEDS` to the comparisons of these
+        tables without a significant difference (`undecided_targets`).
 
     Returns
     -------
@@ -1839,16 +2008,36 @@ def plan_entries(
     collapsed: set[str] = collapsed_runs(
         output_directory / name / "records" for name in EXPERIMENTS
     )
-    learning_rates: dict[str, float] = swept_learning_rates(output_directory)
+    sweep: SweepState = sweep_state(output_directory, max_epochs)
+    learning_rates: dict[str, float] = sweep.rates
     waiting: set[str] = set()
     ready: dict[str, list[model_factory.Preset]] = {}
     for name, presets in experiment_presets.items():
+        if name in SWEEP_EXPERIMENTS:
+            is_edge: bool = (
+                EXPERIMENTS[name].learning_rate in EDGE_LEARNING_RATES
+            )
+            ready[name] = [
+                preset
+                for preset in presets
+                if not is_edge or preset.name in sweep.needed.get(name, ())
+            ]
+            continue
+        if name == CAP_EXPERIMENT:
+            ready[name] = [p for p in presets if p.name in sweep.capped]
+            continue
+        if name == REFIT_EXPERIMENT:
+            ready[name] = [
+                preset
+                for preset in presets
+                if learning_rates.get(preset.name, FIRST_SWEEP_RATE)
+                != FIRST_SWEEP_RATE
+            ]
+            continue
         ready[name] = [
             preset
             for preset in presets
-            if name in SWEEP_EXPERIMENTS
-            or not is_swept(preset.name)
-            or preset.name in learning_rates
+            if not is_swept(preset.name) or preset.name in learning_rates
         ]
         waiting |= {p.name for p in presets} - {p.name for p in ready[name]}
     experiment_presets = ready
@@ -1863,6 +2052,8 @@ def plan_entries(
         if close_gap_tolerance is not None
         else {}
     )
+    for name, undecided in undecided_targets(undecided_tables).items():
+        targets[name] = targets.get(name, set()) | undecided
     input_names: set[str] = {
         preset.input
         for presets in experiment_presets.values()
@@ -2406,6 +2597,7 @@ def _submit(args: Namespace) -> None:
         close_gap_tolerance=args.close_gap_tolerance
         if args.close_gaps
         else None,
+        undecided_tables=args.close_undecided,
     )
     pending: list[dict[str, Any]] = [
         entry for entry in entries if not Path(entry["marker"]).exists()
