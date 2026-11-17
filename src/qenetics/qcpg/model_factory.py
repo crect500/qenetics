@@ -22,6 +22,7 @@ from qenetics.qcpg.classical_models import (
     FactorizationMachine,
     FeatureClassifier,
     OneHotClassifier,
+    PairwiseModel,
     TokenFrequencyClassifier,
 )
 from qenetics.qcpg.hybrid_models import (
@@ -55,6 +56,7 @@ MODEL_FAMILIES: dict[str, type[SequenceModel]] = {
     "one_hot_classifier": OneHotClassifier,
     "token_frequency_classifier": TokenFrequencyClassifier,
     "factorization_machine": FactorizationMachine,
+    "pairwise_model": PairwiseModel,
 }
 # The families of the classical references and ceilings, which have no
 # circuit.
@@ -65,6 +67,7 @@ CLASSICAL_FAMILIES: frozenset[str] = frozenset(
         "one_hot_classifier",
         "token_frequency_classifier",
         "factorization_machine",
+        "pairwise_model",
     }
 )
 # The modules of a model's first layer, whose parameters are its front end.

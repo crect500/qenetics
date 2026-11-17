@@ -197,6 +197,39 @@ def test_factorization_machine() -> None:
         classical_models.FactorizationMachine(3, 2, rank=0)
 
 
+def test_pairwise_model() -> None:
+    model = classical_models.PairwiseModel(3, 2)
+    # 3 codes at each of 3 positions: 9 weights for each of 3 position pairs.
+    assert model.pair_weights.shape == (27,)
+    with torch.no_grad():
+        model.pair_weights.normal_()
+    sequence = _one_hot(4, 3)
+    channels = sequence.transpose(1, 2)
+    codes = channels[:, 1:].transpose(1, 2)
+    table = torch.zeros(81)
+    table[model.pair_indices] = model.pair_weights.detach()
+    table = table.view(3, 3, 3, 3)
+    score = torch.stack(
+        [
+            sum(
+                table[p, a, q, b] * x[p, a] * x[q, b]
+                for p, q in itertools.combinations(range(3), 2)
+                for a in range(3)
+                for b in range(3)
+            )
+            for x in codes
+        ]
+    )[:, None]
+    logits = model.linear(channels.flatten(1)) + model.score_weights(score)
+    assert torch.allclose(model(sequence), torch.sigmoid(logits), atol=1e-6)
+    # The pair weights train, and the pair indices are not saved.
+    model(sequence).sum().backward()
+    assert model.pair_weights.grad is not None
+    assert "pair_indices" not in model.state_dict()
+    with pytest.raises(ValueError, match="at least 2 positions"):
+        classical_models.PairwiseModel(1, 2)
+
+
 def test_classical_network_errors() -> None:
     with pytest.raises(ValueError, match="Unknown front"):
         classical_models.ClassicalNetwork(101, 2, front="attention")

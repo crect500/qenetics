@@ -731,3 +731,84 @@ class FactorizationMachine(SequenceModel):
         return torch.sigmoid(
             self.linear(features) + self.interaction_weights(interactions)
         )
+
+
+class PairwiseModel(SequenceModel):
+    """
+    The complete pairwise model of the sequence, with one output per cell:
+
+        logit_c = b_c + w_c . x + h_c s(x),
+        s(x) = sum over positions p < q of U[p, x_p, q, x_q],
+
+    where x is the flattened encoding and U holds one trained weight for each
+    pair of positions and pair of channels other than the first, the
+    reference (base A for nucleotides). Any pair with the reference is
+    covered by the linear terms, so s spans every function of interaction
+    order 2 in the positions. The pairwise score is shared by the cells, as a
+    factorization machine's factors are, and each cell scales it with h_c.
+    """
+
+    def __init__(
+        self,
+        sequence_length: int,
+        output_quantity: int,
+        **encoding_options: Any,
+    ) -> None:
+        """
+        Args
+        ----
+        sequence_length: The positions of every input.
+        output_quantity: The number of outputs (cells).
+        encoding_options: The input encoding, see `SequenceModel`.
+
+        Raises
+        ------
+        ValueError if there are fewer than 2 positions or channels.
+        """
+        super().__init__(sequence_length, output_quantity, **encoding_options)
+        code_quantity: int = self.channel_quantity - 1
+        if sequence_length < 2 or code_quantity < 1:
+            raise ValueError(
+                "A pairwise model needs at least 2 positions and 2 channels, "
+                f"not {sequence_length} and {self.channel_quantity}"
+            )
+        self.feature_quantity: int = code_quantity * sequence_length
+        self.linear = nn.Linear(
+            self.channel_quantity * sequence_length, output_quantity
+        )
+        # Feature p * codes + a is code a at position p; a pair of features
+        # is trained if its positions differ.
+        rows, columns = torch.triu_indices(
+            self.feature_quantity, self.feature_quantity, 1
+        )
+        different_positions = rows // code_quantity != columns // code_quantity
+        self.register_buffer(
+            "pair_indices",
+            rows[different_positions] * self.feature_quantity
+            + columns[different_positions],
+            persistent=False,
+        )
+        self.pair_weights = nn.Parameter(
+            torch.zeros(int(different_positions.sum()))
+        )
+        self.score_weights = nn.Linear(1, output_quantity, bias=False)
+
+    def pairwise_score(self, channels: Tensor) -> Tensor:
+        """(batch, channels, length) -> the (batch, 1) score s(x)."""
+        features: Tensor = channels[:, 1:].transpose(1, 2).flatten(1)
+        table: Tensor = (
+            torch.zeros(
+                self.feature_quantity**2,
+                dtype=self.pair_weights.dtype,
+                device=self.pair_weights.device,
+            )
+            .index_put((self.pair_indices,), self.pair_weights)
+            .view(self.feature_quantity, self.feature_quantity)
+        )
+        return ((features @ table) * features).sum(1, keepdim=True)
+
+    def _probabilities(self, channels: Tensor) -> Tensor:
+        return torch.sigmoid(
+            self.linear(channels.flatten(1))
+            + self.score_weights(self.pairwise_score(channels))
+        )

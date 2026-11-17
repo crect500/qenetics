@@ -58,6 +58,7 @@ changes per sample run as QNodes on the device given by `--device-name`.
 | `one_hot_classifier` | classical: the flattened sequence into a linear layer or an MLP (OH\_\*) |
 | `token_frequency_classifier` | classical: logistic regression on token frequencies (TF64\_LR) |
 | `factorization_machine` | classical: linear terms and rank-r pairwise interactions of the one-hot sequence (FacM\_r\*) |
+| `pairwise_model` | classical: linear terms and one weight for every pair of positions and non-reference bases (PW\_full) |
 
 `config/quantum_models.json` holds every pure and hybrid model of the report,
 and the classical models of its matched comparisons (`classical_tail/`,

@@ -2269,6 +2269,19 @@
       "training_settings": "pooling_head",
       "input": "bases"
     },
+    "classical_pooling/C_120": {
+      "description": "conv 120 x 16 + ReLU, pooling head, sized for the pooling-head models' totals on HCC (gap plan E14)",
+      "model": "classical_network",
+      "options": {
+        "front": "convolution",
+        "window_length": 16,
+        "filter_quantity": 120,
+        "activation": "none",
+        "tail": "pooling"
+      },
+      "training_settings": "pooling_head",
+      "input": "bases"
+    },
     "classical_pooling/C_8": {
       "description": "Series II's C_8: conv 8 x 16 + ReLU, pooling head",
       "model": "classical_network",
@@ -2459,6 +2472,39 @@
       "training_settings": "pure_whole_model",
       "input": "bases"
     },
+    "classical_whole/FM_1": {
+      "description": "the 44 standardized sequence statistics into an MLP of 1 ReLU unit, sized for the pure models (gap plan E14)",
+      "model": "feature_classifier",
+      "options": {
+        "hidden_layer_sizes": [
+          1
+        ]
+      },
+      "training_settings": "pure_whole_model",
+      "input": "bases"
+    },
+    "classical_whole/FM_2": {
+      "description": "the 44 standardized sequence statistics into an MLP of 2 ReLU units, sized for the pure models (gap plan E14)",
+      "model": "feature_classifier",
+      "options": {
+        "hidden_layer_sizes": [
+          2
+        ]
+      },
+      "training_settings": "pure_whole_model",
+      "input": "bases"
+    },
+    "classical_whole/FM_3": {
+      "description": "the 44 standardized sequence statistics into an MLP of 3 ReLU units, sized for the pure models (gap plan E14)",
+      "model": "feature_classifier",
+      "options": {
+        "hidden_layer_sizes": [
+          3
+        ]
+      },
+      "training_settings": "pure_whole_model",
+      "input": "bases"
+    },
     "classical_whole/FacM_r2": {
       "description": "factorization machine of the one-hot sequence, rank 2: linear terms and 2 pairwise-interaction factors shared by the cells, weighted per cell",
       "model": "factorization_machine",
@@ -2483,6 +2529,40 @@
       "options": {
         "rank": 8
       },
+      "training_settings": "factorization_machine",
+      "input": "bases"
+    },
+    "classical_whole/FacM_r32": {
+      "description": "factorization machine of the one-hot sequence, rank 32 (gap plan E15)",
+      "model": "factorization_machine",
+      "options": {
+        "rank": 32
+      },
+      "training_settings": "factorization_machine",
+      "input": "bases"
+    },
+    "classical_whole/FacM_r128": {
+      "description": "factorization machine of the one-hot sequence, rank 128 (gap plan E15)",
+      "model": "factorization_machine",
+      "options": {
+        "rank": 128
+      },
+      "training_settings": "factorization_machine",
+      "input": "bases"
+    },
+    "classical_whole/FacM_r1024": {
+      "description": "factorization machine of the one-hot sequence, rank 1024 (gap plan E15)",
+      "model": "factorization_machine",
+      "options": {
+        "rank": 1024
+      },
+      "training_settings": "factorization_machine",
+      "input": "bases"
+    },
+    "classical_whole/PW_full": {
+      "description": "the complete pairwise model of the one-hot sequence: linear terms per cell and one weight for every pair of positions and non-A bases, shared by the cells (gap plan E15)",
+      "model": "pairwise_model",
+      "options": {},
       "training_settings": "factorization_machine",
       "input": "bases"
     },
@@ -2784,6 +2864,18 @@
         "front": "convolution",
         "window_length": 1,
         "filter_quantity": 3,
+        "activation": "none"
+      },
+      "training_settings": "deepcpg_tail",
+      "input": "cpg_bpe256"
+    },
+    "classical_tokens/T256_E_8": {
+      "description": "conv 8 x 1 + ReLU, DeepCpG tail, sized for T256_QE_L64 (gap plan E14)",
+      "model": "classical_network",
+      "options": {
+        "front": "convolution",
+        "window_length": 1,
+        "filter_quantity": 8,
         "activation": "none"
       },
       "training_settings": "deepcpg_tail",
