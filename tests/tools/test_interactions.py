@@ -128,3 +128,66 @@ def test_mean_dimension() -> None:
         lambda x: x.flatten(1) @ weights, skewed, 20, generator
     )
     assert additive.value.item() == pytest.approx(1.0, abs=0.05)
+
+
+def test_mean_dimension_known_value() -> None:
+    # Independent positions with unequal base frequencies, and a fixed
+    # central CpG (positions 11 and 12 here).
+    generator = torch.Generator().manual_seed(6)
+    frequencies = torch.rand(LENGTH, 4, generator=generator, dtype=torch.double)
+    frequencies = frequencies / frequencies.sum(1, keepdim=True)
+    frequencies[11] = torch.tensor([0.0, 0, 0, 1], dtype=torch.double)
+    frequencies[12] = torch.tensor([0.0, 0, 1, 0], dtype=torch.double)
+    values = torch.randn(6, 4, generator=generator, dtype=torch.double)
+    a, b, c = 3, 9, 20
+    # Each g centred under its position's frequencies.
+    centred = [
+        values[k] - (values[k] * frequencies[p]).sum()
+        for k, p in enumerate((a, a, b, a, b, c))
+    ]
+
+    def g(k: int, x: torch.Tensor, p: int) -> torch.Tensor:
+        return x[:, p] @ centred[k]
+
+    # A term of the fixed C: constant under the frequencies, so it changes
+    # neither the variance nor the true value.
+    fixed = torch.randn(4, generator=generator, dtype=torch.double)
+
+    def f(x: torch.Tensor) -> torch.Tensor:
+        return (
+            x[:, 11] @ fixed
+            + g(0, x, a)
+            + g(1, x, a) * g(2, x, b)
+            + g(3, x, a) * g(4, x, b) * g(5, x, c)
+        )
+
+    def variance(k: int, p: int) -> torch.Tensor:
+        return (frequencies[p] * centred[k] ** 2).sum()
+
+    v1 = variance(0, a)
+    v2 = variance(1, a) * variance(2, b)
+    v3 = variance(3, a) * variance(4, b) * variance(5, c)
+    true = ((v1 + 2 * v2 + 3 * v3) / (v1 + v2 + v3)).item()
+    estimate = interactions.mean_dimension(
+        f, frequencies, 400, generator, variance_sequence_quantity=50000
+    )
+    assert estimate.value.item() == pytest.approx(true, abs=0.08)
+
+    # Weighting each position's variance uniformly instead, as the plan
+    # warned, counts bases that never occur at the fixed CpG and overstates
+    # the order.
+    sequences = interactions.draw_independent_sequences(
+        frequencies, 400, generator
+    )
+    identity = torch.eye(4, dtype=torch.double)
+    totals = []
+    for sequence in sequences:
+        variants = sequence.expand(LENGTH, 4, LENGTH, 4).clone()
+        variants[torch.arange(LENGTH), :, torch.arange(LENGTH)] = identity
+        outputs = f(variants.flatten(0, 1)).view(LENGTH, 4)
+        totals.append(outputs.var(1, unbiased=False).sum())
+    total_variance = f(
+        interactions.draw_independent_sequences(frequencies, 50000, generator)
+    ).var()
+    uniform = (torch.stack(totals).mean() / total_variance).item()
+    assert uniform > true + 0.2
