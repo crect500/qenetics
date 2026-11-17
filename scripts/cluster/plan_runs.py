@@ -175,6 +175,10 @@ REFIT_EXPERIMENT: str = "E15"
 CAP_EXPERIMENT: str = "LRcap50"
 CAP_EPOCHS: int = 50
 CAP_MARGIN: int = 3
+# The order-2 frontier's final runs with `CAP_EPOCHS` epochs, for the presets
+# whose `CAP_EXPERIMENT` runs beat their 25-epoch sweep runs at the same rate
+# on mean validation score. The matched comparisons keep the 25-epoch runs.
+LONG_EXPERIMENT: str = "E15long"
 # --close-gaps adds these seeds to comparisons within this AUC.
 CLOSE_GAP_SEEDS: tuple[int, ...] = (3, 4)
 CLOSE_GAP_TOLERANCE: float = 0.005
@@ -443,6 +447,15 @@ EXPERIMENTS: dict[str, Experiment] = {
         SWEPT_PRESETS,
         (0,),
         sweep_training_sets,
+        all_sites=True,
+        max_epochs=CAP_EPOCHS,
+    ),
+    LONG_EXPERIMENT: Experiment(
+        "swept models whose longer runs validated better, on the full "
+        f"training sets with {CAP_EPOCHS} epochs, for the order-2 frontier",
+        SWEPT_PRESETS,
+        (0, 1, 2),
+        full_training_sets,
         all_sites=True,
         max_epochs=CAP_EPOCHS,
     ),
@@ -1324,11 +1337,18 @@ class SweepState:
         their best rate so far is the lowest they tried.
     capped: The presets with a chosen rate whose best epoch on a sweep
         dataset was within `CAP_MARGIN` of the epoch limit.
+    longer: The capped presets whose `CAP_EXPERIMENT` runs have a better
+        mean validation score over the sweep datasets than their sweep runs
+        at the chosen rate.
+    at_edge: The presets whose chosen rate is the lowest of
+        `SWEEP_LEARNING_RATES`: their frontier point is at the sweep's edge.
     """
 
     rates: dict[str, float] = field(default_factory=dict)
     needed: dict[str, set[str]] = field(default_factory=dict)
     capped: set[str] = field(default_factory=set)
+    longer: set[str] = field(default_factory=set)
+    at_edge: set[str] = field(default_factory=set)
 
 
 def sweep_state(output_directory: Path, max_epochs: int) -> SweepState:
@@ -1356,7 +1376,16 @@ def sweep_state(output_directory: Path, max_epochs: int) -> SweepState:
     best_epochs: dict[str, dict[float, int]] = defaultdict(
         lambda: defaultdict(int)
     )
+    long_scores: dict[str, dict[str, float]] = defaultdict(dict)
     for row in summarize_runs(output_directory):
+        if (
+            row["experiment"] == CAP_EXPERIMENT
+            and row["status"] == records.STATUS_COMPLETED
+        ):
+            score = row["best_validation_score"]
+            long_scores[row["preset"]][row["dataset"].lower()] = (
+                score if math.isfinite(score) else -math.inf
+            )
         if (
             row["experiment"] in SWEEP_EXPERIMENTS
             and row["status"] == records.STATUS_COMPLETED
@@ -1393,8 +1422,17 @@ def sweep_state(output_directory: Path, max_epochs: int) -> SweepState:
             ]
             if best != min(tried) or not lower:
                 state.rates[preset] = best
+                if best == min(SWEEP_LEARNING_RATES):
+                    state.at_edge.add(preset)
                 if best_epochs[preset][best] + 1 >= max_epochs - CAP_MARGIN:
                     state.capped.add(preset)
+                    longer: dict[str, float] = long_scores.get(preset, {})
+                    if (
+                        SWEEP_DATASETS <= set(longer)
+                        and statistics.fmean(longer[d] for d in SWEEP_DATASETS)
+                        > means[best]
+                    ):
+                        state.longer.add(preset)
                 break
             if max(lower) not in means:
                 state.needed.setdefault(_sweep_name(max(lower)), set()).add(
@@ -2026,6 +2064,9 @@ def plan_entries(
         if name == CAP_EXPERIMENT:
             ready[name] = [p for p in presets if p.name in sweep.capped]
             continue
+        if name == LONG_EXPERIMENT:
+            ready[name] = [p for p in presets if p.name in sweep.longer]
+            continue
         if name == REFIT_EXPERIMENT:
             ready[name] = [
                 preset
@@ -2044,6 +2085,11 @@ def plan_entries(
     if waiting:
         print(
             f"Waiting for the learning-rate sweep: {', '.join(sorted(waiting))}"
+        )
+    if sweep.at_edge:
+        print(
+            "Chosen at the lowest rate of the sweep (frontier at its edge): "
+            + ", ".join(sorted(sweep.at_edge))
         )
     targets: dict[str, set[tuple[str, str, str]]] = (
         close_gap_targets(

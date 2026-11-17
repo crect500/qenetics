@@ -1014,9 +1014,10 @@ def test_learning_rate_sweep(
     # the full runs use it and the refit experiment runs.
     _record_sweep(output, "LR1e-5", name, 0.69)
     state = script.sweep_state(output, 25)
-    assert (state.rates, state.needed, state.capped) == (
+    assert (state.rates, state.needed, state.capped, state.at_edge) == (
         {name: 3e-5},
         {},
+        set(),
         set(),
     )
     names = planned()
@@ -1071,6 +1072,29 @@ def test_sweep_epoch_rule(
     arguments = entries[0]["arguments"]
     assert arguments[arguments.index("--epochs") + 1] == "50"
     assert arguments[arguments.index("--learning-rate") + 1] == "0.0003"
+
+    # The longer runs validate better than 3e-4's 0.75, so the frontier gets
+    # 50-epoch final runs too; a worse longer run would not.
+    _record_sweep(output, "LRcap50", name, 0.76, 30)
+    assert script.sweep_state(output, 25).longer == {name}
+    chosen, _ = script.experiment_presets(presets, ["E15long"], [name], [])
+    entries = script.plan_entries(
+        chosen,
+        [dataset],
+        None,
+        output,
+        {name: 1.0},
+        max_epochs=25,
+        minimum_patience=3,
+        presets_filepath=Path("presets.json"),
+    )
+    assert [entry["name"] for entry in entries] == [
+        f"E15long/2i/{name}/seed{seed}" for seed in (0, 1, 2)
+    ]
+    arguments = entries[0]["arguments"]
+    assert arguments[arguments.index("--epochs") + 1] == "50"
+    _record_sweep(output, "LRcap50", name, 0.74, 30)
+    assert script.sweep_state(output, 25).longer == set()
 
 
 def test_undecided_targets(script: ModuleType, tmp_path: Path) -> None:
