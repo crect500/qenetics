@@ -1097,6 +1097,141 @@ def test_sweep_epoch_rule(
     assert script.sweep_state(output, 25).longer == set()
 
 
+def _record_full(
+    output: Path, dataset: str, preset: str, epochs: int, score: float = 0.7
+) -> None:
+    for seed in range(3):
+        _record_run(
+            output / "full" / "records",
+            output
+            / "full"
+            / dataset
+            / preset.replace("/", "__")
+            / f"seed{seed}",
+            datetime(2026, 11, 1, tzinfo=UTC) + timedelta(minutes=seed),
+            status="completed",
+            cell_validation_aucs=[[0.5, 0.5]] * (epochs - 1) + [[score, score]],
+            test_aucs=[0.7],
+        )
+
+
+def test_epoch_experiment(
+    script: ModuleType,
+    presets: dict[str, model_factory.Preset],
+    data_root: Path,
+) -> None:
+    output = data_root / "out"
+    # Q_L4's best epoch is the 23rd of 25, the CNN's the 2nd.
+    _record_full(output, "2i", "deepcpg_tail/Q_L4", 23)
+    _record_full(output, "2i", "classical_tail/CNN", 2)
+    rows = script.summarize_runs(output)
+    assert script.capped_models(rows) == {("2i", "deepcpg_tail/Q_L4")}
+    names = ["deepcpg_tail/Q_L4", "classical_tail/CNN"]
+    chosen, _ = script.experiment_presets(presets, ["EP50"], names, [])
+    options = {
+        "max_epochs": 25,
+        "minimum_patience": 3,
+        "presets_filepath": Path("presets.json"),
+    }
+    datasets = [script.load_dataset(data_root / "2i")]
+    entries = script.plan_entries(
+        chosen, datasets, None, output, dict.fromkeys(names, 1.0), **options
+    )
+    assert [entry["name"] for entry in entries] == [
+        f"EP50/2i/deepcpg_tail/Q_L4/seed{seed}" for seed in (0, 1, 2)
+    ]
+    arguments = entries[0]["arguments"]
+    assert arguments[arguments.index("--epochs") + 1] == "50"
+
+
+def test_pairwise_ceiling_experiment(
+    script: ModuleType,
+    presets: dict[str, model_factory.Preset],
+    data_root: Path,
+    capsys: pytest.CaptureFixture,
+) -> None:
+    output = data_root / "out"
+    chosen, _ = script.experiment_presets(
+        presets, ["E15cell"], ["classical_whole/PW_cell"], []
+    )
+    options = {
+        "max_epochs": 25,
+        "minimum_patience": 3,
+        "presets_filepath": Path("presets.json"),
+    }
+    datasets = [
+        script.load_dataset(data_root / name) for name in ("2i", "hepg2")
+    ]
+    costs = {"classical_whole/PW_cell": 1.0}
+    # It waits for PW_full's rate.
+    assert (
+        script.plan_entries(chosen, datasets, None, output, costs, **options)
+        == []
+    )
+    assert "classical_whole/PW_cell" in capsys.readouterr().out
+    for sweep, score in (
+        ("LR1e-3", 0.70),
+        ("LR3e-4", 0.75),
+        ("LR1e-4", 0.72),
+        ("LR3e-5", 0.71),
+    ):
+        _record_sweep(output, sweep, "classical_whole/PW_full", score)
+    entries = script.plan_entries(
+        chosen, datasets, None, output, costs, **options
+    )
+    # HepG2 only, at PW_full's rate and epoch limit.
+    assert [entry["name"] for entry in entries] == [
+        f"E15cell/hepg2/classical_whole/PW_cell/seed{seed}"
+        for seed in (0, 1, 2)
+    ]
+    arguments = entries[0]["arguments"]
+    assert arguments[arguments.index("--learning-rate") + 1] == "0.0003"
+    assert arguments[arguments.index("--epochs") + 1] == "25"
+
+
+def test_substitute_runs(script: ModuleType) -> None:
+    def runs(experiment: str, validation: float, quantity: int = 3) -> list:
+        return [
+            {
+                "experiment": experiment,
+                "best_validation_score": validation,
+                "test_mean_cell_auc": 0.7,
+            }
+            for _ in range(quantity)
+        ]
+
+    groups = {
+        ("full", "2i", ""): {
+            "deepcpg_tail/Q_L4": runs("full", 0.70),
+            "classical_tail/CNN": runs("full", 0.80),
+            "classical_whole/FacM_r8": runs("full", 0.60),
+        },
+        ("EP50", "2i", ""): {
+            # Better on validation: replaces Q_L4's full runs.
+            "deepcpg_tail/Q_L4": runs("EP50", 0.72),
+            # Worse: the CNN keeps its own.
+            "classical_tail/CNN": runs("EP50", 0.79),
+        },
+        # Better, but fewer usable runs: not used.
+        ("E15", "2i", ""): {"classical_whole/FacM_r8": runs("E15", 0.65, 2)},
+        ("E15long", "2i", ""): {
+            "classical_whole/FacM_r8": runs("E15long", 0.62)
+        },
+        ("E12", "2i", "fold0"): {"deepcpg_tail/Q_L320": runs("E12", 0.7, 1)},
+    }
+    chosen = script.substitute_runs(groups)
+    assert set(chosen) == {("full", "2i", ""), ("E12", "2i", "fold0")}
+    used = {
+        preset: rows[0]["experiment"]
+        for preset, rows in chosen[("full", "2i", "")].items()
+    }
+    assert used == {
+        "deepcpg_tail/Q_L4": "EP50",
+        "classical_tail/CNN": "full",
+        "classical_whole/FacM_r8": "E15long",
+    }
+
+
 def test_undecided_targets(script: ModuleType, tmp_path: Path) -> None:
     table = tmp_path / "matched_total.tsv"
     columns = script.COMPARISON_COLUMNS

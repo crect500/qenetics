@@ -201,6 +201,7 @@
     "classical_whole/FacM_r128": 70,
     "classical_whole/FacM_r1024": 300,
     "classical_whole/PW_full": 550,
+    "classical_whole/PW_cell": 2900,
     "classical_whole/OH_lin": 24,
     "classical_whole/OH_mlp": 87,
     "classical_tokens/K3_CNN": 910,

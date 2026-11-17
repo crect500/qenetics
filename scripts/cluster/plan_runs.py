@@ -179,6 +179,25 @@ CAP_MARGIN: int = 3
 # whose `CAP_EXPERIMENT` runs beat their 25-epoch sweep runs at the same rate
 # on mean validation score. The matched comparisons keep the 25-epoch runs.
 LONG_EXPERIMENT: str = "E15long"
+# The order-2 ceiling, PW_full with one table per cell, on one dataset with
+# the fewest cells, at PW_full's chosen rate and epoch limit.
+PAIRWISE_CEILING: str = "classical_whole/PW_cell"
+PAIRWISE_SHARED: str = "classical_whole/PW_full"
+PAIRWISE_CEILING_EXPERIMENT: str = "E15cell"
+PAIRWISE_CEILING_DATASET: str = "hepg2"
+# Every model on the full training sets whose best epoch in some run was
+# within `CAP_MARGIN` of `EPOCH_LIMIT`, run again with `CAP_EPOCHS` epochs.
+# The swept presets have their own rule (`CAP_EXPERIMENT`, `LONG_EXPERIMENT`).
+EPOCH_EXPERIMENT: str = "EP50"
+EPOCH_LIMIT: int = 25
+# Experiments whose runs of a preset on a dataset can stand in for its runs in
+# the matched experiments: `compare` uses, for each, the run set with the best
+# mean validation score among those with at least as many usable seeds.
+SUBSTITUTE_EXPERIMENTS: tuple[str, ...] = (
+    EPOCH_EXPERIMENT,
+    REFIT_EXPERIMENT,
+    LONG_EXPERIMENT,
+)
 # --close-gaps adds these seeds to comparisons within this AUC.
 CLOSE_GAP_SEEDS: tuple[int, ...] = (3, 4)
 CLOSE_GAP_TOLERANCE: float = 0.005
@@ -457,6 +476,28 @@ EXPERIMENTS: dict[str, Experiment] = {
         (0, 1, 2),
         full_training_sets,
         all_sites=True,
+        max_epochs=CAP_EPOCHS,
+    ),
+    PAIRWISE_CEILING_EXPERIMENT: Experiment(
+        "the complete pairwise model with one table per cell, the order-2 "
+        f"ceiling, on {PAIRWISE_CEILING_DATASET} at PW_full's rate",
+        (PAIRWISE_CEILING,),
+        (0, 1, 2),
+        lambda dataset, autosomes: (
+            full_training_sets(dataset, autosomes)
+            if dataset.lower() == PAIRWISE_CEILING_DATASET
+            else []
+        ),
+        all_sites=True,
+    ),
+    EPOCH_EXPERIMENT: Experiment(
+        "models whose best epoch on the full training sets was near the "
+        f"limit, again with {CAP_EPOCHS} epochs",
+        ("*",),
+        (0, 1, 2),
+        full_training_sets,
+        all_sites=True,
+        deduplicated=True,
         max_epochs=CAP_EPOCHS,
     ),
     REFIT_EXPERIMENT: Experiment(
@@ -786,6 +827,12 @@ def _parse_script_args(arguments: list[str] | None = None) -> Namespace:
         action="store_true",
         help="Also match the ceilings with classical models as if they were "
         "quantum models, in families of their own in the comparisons file.",
+    )
+    compare.add_argument(
+        "--no-substitutes",
+        action="store_true",
+        help="Compare the full training sets' own runs only, without the "
+        f"runs of {', '.join(SUBSTITUTE_EXPERIMENTS)} in their place.",
     )
     compare.add_argument(
         "--name",
@@ -1822,6 +1869,70 @@ def close_gap_targets(
     return targets
 
 
+def capped_models(rows: list[dict[str, Any]]) -> set[tuple[str, str]]:
+    """
+    The (dataset, preset) of `EPOCH_EXPERIMENT`: models with a usable run on
+    the full training sets whose best epoch was within `CAP_MARGIN` of
+    `EPOCH_LIMIT`, except the swept presets and the pairwise ceiling.
+
+    Args
+    ----
+    rows: Rows of `summarize_runs`.
+    """
+    return {
+        (row["dataset"], row["preset"])
+        for row in rows
+        if row["experiment"] == "full"
+        and _usable(row)
+        and row["best_epoch"] is not None
+        and row["best_epoch"] + 1 >= EPOCH_LIMIT - CAP_MARGIN
+        and not is_swept(row["preset"])
+        and row["preset"] != PAIRWISE_CEILING
+    }
+
+
+def substitute_runs(
+    groups: dict[tuple[str, str, str], dict[str, list[dict[str, Any]]]],
+) -> dict[tuple[str, str, str], dict[str, list[dict[str, Any]]]]:
+    """
+    Put the runs of `SUBSTITUTE_EXPERIMENTS` in place of those of the
+    matched experiments, where they validate better.
+
+    For each preset of a matched experiment, cell type and fold, the run set
+    used is the one, of its own and each substitute experiment's on the same
+    test set, with the best mean validation score among those with at least
+    as many usable runs as its own. The substitute experiments' groups are
+    dropped.
+
+    Args
+    ----
+    groups: `comparison_groups`.
+
+    Returns
+    -------
+    The groups with substitutes.
+    """
+    chosen: dict[tuple[str, str, str], dict[str, list[dict[str, Any]]]] = {}
+    for (experiment, dataset, fold), by_preset in groups.items():
+        if experiment in SUBSTITUTE_EXPERIMENTS:
+            continue
+        if experiment not in MATCHED_EXPERIMENTS:
+            chosen[(experiment, dataset, fold)] = by_preset
+            continue
+        replaced: dict[str, list[dict[str, Any]]] = {}
+        for preset, preset_rows in by_preset.items():
+            options = [preset_rows] + [
+                groups[(other, dataset, fold)][preset]
+                for other in SUBSTITUTE_EXPERIMENTS
+                if (other, dataset, fold) in groups
+                and len(groups[(other, dataset, fold)].get(preset, []))
+                >= len(preset_rows)
+            ]
+            replaced[preset] = max(options, key=lambda rows: _means(rows)[0])
+        chosen[(experiment, dataset, fold)] = replaced
+    return chosen
+
+
 def undecided_targets(
     filepaths: Iterable[Path], alpha: float = 0.05
 ) -> dict[str, set[tuple[str, str, str]]]:
@@ -2067,6 +2178,20 @@ def plan_entries(
         if name == LONG_EXPERIMENT:
             ready[name] = [p for p in presets if p.name in sweep.longer]
             continue
+        if name == PAIRWISE_CEILING_EXPERIMENT:
+            if PAIRWISE_SHARED in learning_rates:
+                learning_rates = {
+                    **learning_rates,
+                    PAIRWISE_CEILING: learning_rates[PAIRWISE_SHARED],
+                }
+                ready[name] = presets
+            else:
+                ready[name] = []
+                waiting |= {p.name for p in presets}
+            continue
+        if name == EPOCH_EXPERIMENT:
+            ready[name] = presets
+            continue
         if name == REFIT_EXPERIMENT:
             ready[name] = [
                 preset
@@ -2100,6 +2225,18 @@ def plan_entries(
     )
     for name, undecided in undecided_targets(undecided_tables).items():
         targets[name] = targets.get(name, set()) | undecided
+    capped: set[tuple[str, str]] = (
+        capped_models(summarize_runs(output_directory))
+        if EPOCH_EXPERIMENT in experiment_presets
+        else set()
+    )
+    # A capped model's runs with 50 epochs may stand in for its full runs, so
+    # its extra seeds run there too.
+    targets[EPOCH_EXPERIMENT] = targets.get(EPOCH_EXPERIMENT, set()) | {
+        (dataset, fold, preset)
+        for dataset, fold, preset in targets.get("full", set())
+        if (dataset, preset) in capped
+    }
     input_names: set[str] = {
         preset.input
         for presets in experiment_presets.values()
@@ -2114,6 +2251,10 @@ def plan_entries(
                 dataset, input_names, output_directory
             )
         for name, presets in experiment_presets.items():
+            if name == EPOCH_EXPERIMENT:
+                presets = [
+                    p for p in presets if (dataset.name, p.name) in capped
+                ]
             runs += training_entries(
                 name,
                 dataset,
@@ -2122,7 +2263,10 @@ def plan_entries(
                 output_directory,
                 costs,
                 collapsed,
-                max_epochs=max_epochs,
+                max_epochs=CAP_EPOCHS
+                if name == PAIRWISE_CEILING_EXPERIMENT
+                and PAIRWISE_SHARED in sweep.longer
+                else max_epochs,
                 minimum_patience=minimum_patience,
                 presets_filepath=presets_filepath,
                 learning_rates=learning_rates,
@@ -3216,6 +3360,7 @@ def _compare(
     single_seed_variance: str = POOLED_VARIANCE,
     match_ceilings: bool = False,
     name: str = COMPARISONS_FOLDER,
+    substitutes: bool = True,
 ) -> None:
     """
     Bootstrap the comparisons of every usable run's model, and write every
@@ -3229,7 +3374,7 @@ def _compare(
     sample of at most `site_quantity` sites with the same weights for every
     model. Single-seed models borrow the pooled seed variance of their
     experiment and cell type, else their cell type's, else everyone's. q
-    values are Benjamini–Hochberg within each family: one matched table, one
+    values are Benjaminiâ€“Hochberg within each family: one matched table, one
     experiment's comparisons with one classical model, its complex and real
     twins, or its other pairs.
 
@@ -3253,6 +3398,9 @@ def _compare(
     match_ceilings: Also match the ceilings as if they were quantum models,
         in the families "<experiment> ceilings <table>".
     name: The folder of the output directory to write to.
+    substitutes: Use the runs of `SUBSTITUTE_EXPERIMENTS` in place of the
+        matched experiments' where they validate better (`substitute_runs`);
+        otherwise leave those experiments out.
     """
     output_directory = output_directory.resolve()
     folder: Path = output_directory / name
@@ -3263,6 +3411,15 @@ def _compare(
     rows: list[dict[str, Any]] = summarize_runs(output_directory)
     usable: list[dict[str, Any]] = [row for row in rows if _usable(row)]
     groups = comparison_groups(rows)
+    groups = (
+        substitute_runs(groups)
+        if substitutes
+        else {
+            key: by_preset
+            for key, by_preset in groups.items()
+            if key[0] not in SUBSTITUTE_EXPERIMENTS
+        }
+    )
 
     jobs: list[dict[str, Any]] = []
     for by_preset in groups.values():
@@ -3378,9 +3535,11 @@ def _compare(
     if any(key[0] in MATCHED_EXPERIMENTS for key in values):
         matched_rows: list[dict[str, Any]] = [
             row
-            for row in usable
-            if row["experiment"] in MATCHED_EXPERIMENTS
-            and row["record"] in by_record
+            for (experiment, _, _), by_preset in groups.items()
+            if experiment in MATCHED_EXPERIMENTS
+            for preset_rows in by_preset.values()
+            for row in preset_rows
+            if row["record"] in by_record
         ]
         print(f"Measuring the models of {len(matched_rows)} runs", flush=True)
         sizes = measure_sizes(
@@ -3523,6 +3682,7 @@ def main(arguments: list[str] | None = None) -> None:
             args.single_seed_variance,
             args.match_ceilings,
             args.name,
+            not args.no_substitutes,
         )
     else:
         _work(args)

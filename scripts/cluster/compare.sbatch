@@ -1,8 +1,9 @@
 #!/bin/bash
 # The bootstrap comparisons of a `plan_runs.py submit` output directory, in
-# the four variants of the gap plan: single sites (with the ceilings), the
-# setting-wide token pool with the folds' own seed variance, and genomic
-# blocks of 1 Mb and of 100 kb. Run from the repository:
+# the variants of the gap plan: single sites (with the ceilings), the same
+# without the 50-epoch and refit runs in the pool, the setting-wide token
+# pool with the folds' own seed variance, and genomic blocks of 1 Mb and of
+# 100 kb. Run from the repository:
 #     sbatch scripts/cluster/compare.sbatch /scratch/qcpg
 # Adjust the resources to your cluster.
 #SBATCH --job-name=qcpg-compare
@@ -43,6 +44,7 @@ compare() {
 }
 
 compare
+compare --name comparisons_original_pool --no-substitutes
 compare --name comparisons_setting_pool --token-pool setting \
     --single-seed-variance same-models
 compare --name comparisons_block_1mb --block-size 1000000
