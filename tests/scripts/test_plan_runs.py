@@ -690,6 +690,7 @@ def test_submit_dry_run(
     assert settings == {
         "gpu_nodes": 4,
         "cpu_nodes": 5,
+        "a100_jobs": 0,
         "cpu_max_hours": 48.0,
         "jobs": {},
     }
@@ -1793,6 +1794,73 @@ def test_preset_size(
     output = capsys.readouterr().out
     assert "Not measuring classical_tail/ID_w64 on 2i: Windows of 64" in output
     assert "Not measuring x/y: not in the presets file" in output
+
+
+def test_submit_a100_jobs(
+    script: ModuleType,
+    data_root: Path,
+    capsys: pytest.CaptureFixture,
+) -> None:
+    output = data_root / "out"
+    script.main(
+        [
+            "submit",
+            "--data-directories",
+            str(data_root / "2i"),
+            "--output-directory",
+            str(output),
+            "--experiments",
+            "full",
+            "--presets",
+            "whole_model/WP_L4",
+            "--seeds",
+            "0",
+            "--gpu-nodes",
+            "1",
+            "--a100-jobs",
+            "1",
+            "--a100-time",
+            "1-00:00:00",
+            "--dry-run",
+        ]
+    )
+    lines: list[str] = capsys.readouterr().out.splitlines()
+    commands = [
+        shlex.split(line) for line in lines if line.startswith("sbatch")
+    ]
+    # The GPU node, the A100 job and the CPU node, in that order.
+    assert [command[2] for command in commands] == [
+        "--partition=gpu",
+        "--partition=high-gpu-mem",
+        "--partition=main",
+    ]
+    a100 = commands[1]
+    assert a100[3:5] == ["--array=0-0%1", "--time=1-00:00:00"]
+    assert a100[-2] == str(script.TEMPLATES["a100"])
+    queue_directory = Path(a100[-1])
+    settings = json.loads((queue_directory / "queue.json").read_text())
+    assert settings["a100_jobs"] == 1
+    with pytest.raises(SystemExit):
+        script.main(
+            [
+                "submit",
+                "--data-directories",
+                str(data_root / "2i"),
+                "--output-directory",
+                str(output),
+                "--a100-jobs",
+                "-1",
+                "--dry-run",
+            ]
+        )
+
+
+def test_pool_a100_template() -> None:
+    template = Path("scripts/cluster/pool_a100.sbatch").read_text()
+    assert "#SBATCH --job-name=qcpg-pool-a100" in template
+    assert "#SBATCH --gres=gpu:1" in template
+    assert "--resources gpu --gpu" in template
+    assert "\r" not in template
 
 
 @pytest.mark.parametrize(

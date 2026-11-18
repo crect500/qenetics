@@ -105,12 +105,20 @@ PRESETS_FILEPATH: Path = REPOSITORY / "config" / "quantum_models.json"
 COSTS_FILEPATH: Path = CLUSTER_DIRECTORY / "preset_costs.json"
 GPU: str = "gpu"
 CPU: str = "cpu"
+# Jobs of one GPU on the high-memory GPU partition (an A100), whose worker
+# is a GPU worker like those of the GPU nodes.
+A100: str = "a100"
 TEMPLATES: dict[str, Path] = {
     GPU: CLUSTER_DIRECTORY / "pool_gpu.sbatch",
     CPU: CLUSTER_DIRECTORY / "pool_cpu.sbatch",
+    A100: CLUSTER_DIRECTORY / "pool_a100.sbatch",
 }
 # The job names set by the templates, which find a campaign's jobs.
-JOB_NAMES: dict[str, str] = {GPU: "qcpg-pool-gpu", CPU: "qcpg-pool-cpu"}
+JOB_NAMES: dict[str, str] = {
+    GPU: "qcpg-pool-gpu",
+    CPU: "qcpg-pool-cpu",
+    A100: "qcpg-pool-a100",
+}
 GPUS_PER_NODE: int = 4
 # The cluster's per-user limits: at most this many nodes at once, CPU and GPU
 # nodes together (its CPU quota allows 16 CPU nodes, or 12 beside 4 GPU
@@ -671,6 +679,20 @@ def _parse_script_args(arguments: list[str] | None = None) -> Namespace:
     submit.add_argument("--gpu-partition", default="gpu")
     submit.add_argument("--cpu-partition", default="main")
     submit.add_argument(
+        "--a100-jobs",
+        type=int,
+        default=0,
+        help="Also run this many jobs of one A100 each (pool_a100.sbatch), "
+        "whose GPU workers take the longest runs as those of the GPU nodes "
+        "do.",
+    )
+    submit.add_argument("--a100-partition", default="high-gpu-mem")
+    submit.add_argument(
+        "--a100-time",
+        default="7-00:00:00",
+        help="The time limit of A100 jobs, or the partition's if shorter.",
+    )
+    submit.add_argument(
         "--gpu-nodes",
         type=int,
         default=MAX_GPU_NODES,
@@ -856,7 +878,7 @@ def _parse_script_args(arguments: list[str] | None = None) -> Namespace:
     )
     args: Namespace = parser.parse_args(arguments)
     if args.command == "submit" and (
-        min(args.gpu_nodes, args.cpu_nodes or 0) < 0
+        min(args.gpu_nodes, args.cpu_nodes or 0, args.a100_jobs) < 0
         or args.cpu_workers_per_node < 1
     ):
         parser.error(
@@ -2633,7 +2655,7 @@ def sbatch_command(
 
     Args
     ----
-    resources: `GPU` or `CPU`.
+    resources: `GPU`, `CPU` or `A100`.
     partition: The partition.
     node_quantity: The node jobs, which all may run at once.
     time_limit: Their time limit.
@@ -2803,6 +2825,11 @@ def _submit(args: Namespace) -> None:
     time_limits: dict[str, str] = {
         GPU: _time_limit(args.gpu_time, args.gpu_partition),
         CPU: _time_limit(args.cpu_time, args.cpu_partition),
+        **(
+            {A100: _time_limit(args.a100_time, args.a100_partition)}
+            if args.a100_jobs
+            else {}
+        ),
     }
     cpu_hours_limit: float = min(
         args.cpu_max_hours, slurm_hours(time_limits[CPU]) / CPU_TIME_SAFETY
@@ -2828,7 +2855,10 @@ def _submit(args: Namespace) -> None:
             ),
         ),
     }
-    if node_quantities[GPU] == 0 and cpu_run_quantity < len(runs):
+    node_quantities[A100] = min(args.a100_jobs, len(runs))
+    if node_quantities[GPU] + node_quantities[A100] == 0 and (
+        cpu_run_quantity < len(runs)
+    ):
         print(
             f"Without GPU nodes, {len(runs) - cpu_run_quantity} runs are too "
             "long to run"
@@ -2843,6 +2873,7 @@ def _submit(args: Namespace) -> None:
             .isoformat(timespec="seconds"),
             "gpu_nodes": node_quantities[GPU],
             "cpu_nodes": node_quantities[CPU],
+            "a100_jobs": node_quantities[A100],
             "cpu_max_hours": args.cpu_max_hours,
             "jobs": {},
         },
@@ -2867,6 +2898,7 @@ def _submit(args: Namespace) -> None:
     jobs: dict[str, str] = {}
     for resources, partition in (
         (GPU, args.gpu_partition),
+        (A100, args.a100_partition),
         (CPU, args.cpu_partition),
     ):
         if node_quantities[resources] == 0:
