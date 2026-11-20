@@ -5,6 +5,7 @@
 #     sbatch scripts/cluster/diagnostics.sbatch /scratch/qcpg -o diagnostics.tsv
 # Adjust the resources to your cluster.
 #SBATCH --job-name=qcpg-diagnostics
+#SBATCH --partition=gpu
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
